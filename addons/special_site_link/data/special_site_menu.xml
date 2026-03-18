@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <record id="action_special_site" model="ir.actions.act_url">
+            <field name="name">Test Site</field>
+            <field name="url">https://www.sdiwire.com</field>
+            <field name="target">new</field>
+        </record>
+
+        <menuitem
+            id="menu_special_site_root"
+            name="Special Site"
+            action="action_special_site"
+            sequence="99"
+            web_icon="special_site_link,static/description/sdiicon.png"
+        />
+    </data>
+</odoo>
