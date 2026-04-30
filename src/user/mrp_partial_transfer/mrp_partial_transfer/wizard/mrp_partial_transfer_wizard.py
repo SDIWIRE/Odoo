@@ -82,11 +82,11 @@ class MrpPartialTransferWizard(models.TransientModel):
 
     def action_confirm_transfer(self):
         """
-        Odoo 19 compatible approach: instead of calling _split() on the MO's
-        own stock moves (API changed in v17 and is fragile), we create a brand
-        new stock move directly from the production virtual location to the
-        destination. This is clean, does not touch the MO's internal moves,
-        and does not trigger MO closure.
+        Odoo 19 approach: use stock.picking to move finished goods from
+        the production virtual location to the destination. stock.picking
+        handles all the stock.move field requirements internally, so we
+        don't need to know which fields stock.move requires — we just
+        create a picking with move_ids_without_package.
         """
         self.ensure_one()
         production = self.production_id
@@ -101,75 +101,91 @@ class MrpPartialTransferWizard(models.TransientModel):
                 uom=self.product_uom_id.name,
             ))
 
-        # ── Step 1: Determine the production virtual location ────────────────
-        # Try the product property first, then fall back to the MO's move
-        production_location = None
-        try:
-            production_location = production.product_id.with_company(
-                production.company_id
-            ).property_stock_production
-        except Exception:
-            pass
+        # ── Step 1: Find the production virtual location ─────────────────────
+        # Get it from the existing finished move — most reliable source
+        finished_move = production.move_finished_ids.filtered(
+            lambda m: m.product_id == production.product_id
+            and m.state not in ('done', 'cancel')
+        )[:1]
 
-        if not production_location:
-            finished_move = production.move_finished_ids.filtered(
-                lambda m: m.product_id == production.product_id
-                and m.state not in ('done', 'cancel')
-            )[:1]
-            if finished_move:
-                production_location = finished_move.location_id
-            else:
-                raise UserError(_(
-                    'Cannot determine the production virtual location. '
-                    'Please check the product and company configuration.'
-                ))
+        if finished_move:
+            production_location = finished_move.location_id
+        else:
+            raise UserError(_(
+                'No open finished-goods move found on this Manufacturing Order. '
+                'It may already be fully transferred or cancelled.'
+            ))
 
-        # ── Step 2: Create a new stock move: Virtual Production → Destination ─
-        move_vals = {
-            'name': _('Partial Transfer: %s') % production.name,
-            'product_id': self.product_id.id,
-            'product_uom': self.product_uom_id.id,
-            'product_uom_qty': self.qty_to_transfer,
+        # ── Step 2: Find an internal picking type for this company ────────────
+        # We need a picking_type to create the picking. Use 'internal transfer'.
+        picking_type = self.env['stock.picking.type'].search([
+            ('code', '=', 'internal'),
+            ('company_id', '=', production.company_id.id),
+            ('warehouse_id', '!=', False),
+        ], limit=1)
+
+        if not picking_type:
+            raise UserError(_(
+                'No internal transfer operation type found for company %s. '
+                'Please configure one in Inventory > Configuration > Operation Types.',
+                production.company_id.name,
+            ))
+
+        # ── Step 3: Create a stock.picking (internal transfer) ────────────────
+        # Let Odoo handle all the stock.move field defaults via the picking.
+        # This avoids us needing to know every required field on stock.move.
+        picking_vals = {
+            'picking_type_id': picking_type.id,
             'location_id': production_location.id,
             'location_dest_id': self.location_dest_id.id,
             'origin': production.name,
             'company_id': production.company_id.id,
-            'state': 'draft',
-        }
-        partial_move = self.env['stock.move'].create(move_vals)
-        partial_move._action_confirm()
-        partial_move._action_assign()
-
-        # ── Step 3: Set done quantity and lot on the move line ───────────────
-        if not partial_move.move_line_ids:
-            ml_vals = {
-                'move_id': partial_move.id,
+            'move_ids_without_package': [(0, 0, {
                 'product_id': self.product_id.id,
-                'product_uom_id': self.product_uom_id.id,
-                'quantity': self.qty_to_transfer,
+                'product_uom_qty': self.qty_to_transfer,
+                'product_uom': self.product_uom_id.id,
                 'location_id': production_location.id,
                 'location_dest_id': self.location_dest_id.id,
-                'company_id': production.company_id.id,
-            }
-            if self.lot_id:
-                ml_vals['lot_id'] = self.lot_id.id
-            self.env['stock.move.line'].create(ml_vals)
-        else:
-            for ml in partial_move.move_line_ids:
-                ml.quantity = self.qty_to_transfer
-                if self.lot_id:
-                    ml.lot_id = self.lot_id.id
+                'description_picking': self.product_id.display_name,
+            })],
+        }
+        picking = self.env['stock.picking'].create(picking_vals)
+        picking.action_confirm()
+        picking.action_assign()
 
-        # ── Step 4: Validate → goods land in inventory immediately ───────────
-        partial_move._action_done()
+        # ── Step 4: Set done quantity and lot on the move lines ───────────────
+        for move in picking.move_ids:
+            if not move.move_line_ids:
+                # Force create a move line if auto-assign didn't make one
+                # (production virtual location has no tracked quants)
+                self.env['stock.move.line'].create({
+                    'move_id': move.id,
+                    'picking_id': picking.id,
+                    'product_id': self.product_id.id,
+                    'product_uom_id': self.product_uom_id.id,
+                    'quantity': self.qty_to_transfer,
+                    'location_id': production_location.id,
+                    'location_dest_id': self.location_dest_id.id,
+                    'company_id': production.company_id.id,
+                })
+            else:
+                for ml in move.move_line_ids:
+                    ml.quantity = self.qty_to_transfer
+                    if self.lot_id:
+                        ml.lot_id = self.lot_id.id
 
-        # ── Step 5: Update MO qty_producing for internal progress tracking ───
+        # ── Step 5: Validate picking → goods land in inventory immediately ────
+        picking.with_context(skip_backorder=True).button_validate()
+
+        # ── Step 6: Update MO qty_producing for internal progress tracking ────
         already_produced = production.qty_transferred_to_stock
-        production.write({
-            'qty_producing': already_produced + self.qty_to_transfer,
-        })
+        new_total = already_produced + self.qty_to_transfer
+        try:
+            production.write({'qty_producing': new_total})
+        except Exception as e:
+            _logger.warning('Could not update qty_producing on MO %s: %s', production.name, e)
 
-        # ── Step 6: Proportionally consume raw material components ───────────
+        # ── Step 7: Proportionally consume raw material components ────────────
         fraction = self.qty_to_transfer / production.product_qty
 
         for raw_move in production.move_raw_ids.filtered(
@@ -199,30 +215,30 @@ class MrpPartialTransferWizard(models.TransientModel):
                 })
                 raw_move._action_done()
 
-        # ── Step 7: Ensure MO stays open if there is remaining qty ───────────
+        # ── Step 8: Ensure MO stays open if remaining qty > 0 ────────────────
         if production.state == 'done':
             remaining = production.qty_remaining_to_produce
             if remaining > 0:
                 production.write({'state': 'progress'})
                 _logger.info(
-                    'MO %s forced back to progress after partial transfer. '
-                    'Remaining: %s %s',
+                    'MO %s forced back to progress. Remaining: %s %s',
                     production.name, remaining, production.product_uom_id.name,
                 )
 
-        # ── Step 8: Log chatter note ─────────────────────────────────────────
+        # ── Step 9: Log chatter note ──────────────────────────────────────────
         total_so_far = already_produced + self.qty_to_transfer
         production.message_post(
             body=_(
                 '<b>Partial Transfer to Stock</b><br/>'
                 'Transferred <b>%(qty)s %(uom)s</b> of <b>%(product)s</b> '
-                'to <b>%(location)s</b>.<br/>'
+                'to <b>%(location)s</b> via picking <b>%(picking)s</b>.<br/>'
                 'Total produced so far: <b>%(total)s</b> of '
                 '<b>%(demand)s %(uom)s</b> demanded.',
                 qty=self.qty_to_transfer,
                 uom=self.product_uom_id.name,
                 product=self.product_id.display_name,
                 location=self.location_dest_id.complete_name,
+                picking=picking.name,
                 total=total_so_far,
                 demand=production.product_qty,
             )
