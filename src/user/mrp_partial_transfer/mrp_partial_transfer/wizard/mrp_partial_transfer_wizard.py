@@ -140,13 +140,12 @@ class MrpPartialTransferWizard(models.TransientModel):
             'location_dest_id': self.location_dest_id.id,
             'origin': production.name,
             'company_id': production.company_id.id,
-            'move_ids_without_package': [(0, 0, {
+            'move_ids': [(0, 0, {
                 'product_id': self.product_id.id,
                 'product_uom_qty': self.qty_to_transfer,
                 'product_uom': self.product_uom_id.id,
                 'location_id': production_location.id,
                 'location_dest_id': self.location_dest_id.id,
-                'description_picking': self.product_id.display_name,
             })],
         }
         picking = self.env['stock.picking'].create(picking_vals)
