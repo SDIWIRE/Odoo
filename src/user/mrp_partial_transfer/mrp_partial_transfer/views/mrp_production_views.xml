@@ -12,7 +12,7 @@
                         string="Transfer Partial to Stock"
                         type="object"
                         class="btn-primary"
-                        attrs="{'invisible': [['show_partial_transfer_button', '=', False]]}"
+                        invisible="not show_partial_transfer_button"
                         icon="fa-truck"
                         help="Move a partial quantity of finished goods to stock now, keeping this order open for the remaining quantity."/>
             </xpath>
@@ -21,11 +21,11 @@
             <xpath expr="//field[@name='qty_producing']" position="after">
                 <field name="qty_transferred_to_stock"
                        readonly="1"
-                       attrs="{'invisible': [['qty_transferred_to_stock', '=', 0.0]]}"
+                       invisible="qty_transferred_to_stock == 0"
                        string="Already Transferred to Stock"/>
                 <field name="qty_remaining_to_produce"
                        readonly="1"
-                       attrs="{'invisible': [['qty_transferred_to_stock', '=', 0.0]]}"
+                       invisible="qty_transferred_to_stock == 0"
                        string="Still to Produce"/>
                 <!-- Hidden field needed for button visibility compute -->
                 <field name="show_partial_transfer_button" invisible="1"/>

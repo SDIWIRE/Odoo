@@ -19,7 +19,7 @@
                                    string="Remaining to Produce"/>
                             <field name="qty_to_transfer"
                                    string="Quantity to Transfer Now"
-                                   attrs="{'required': [['qty_to_transfer', '=', 0]]}"/>
+                                   required="1"/>
                         </group>
                     </group>
                     <group>
@@ -27,7 +27,7 @@
                             <field name="location_dest_id"
                                    string="Transfer to Location"/>
                             <field name="lot_id"
-                                   attrs="{'invisible': [['product_id.tracking', '=', 'none']]}"
+                                   invisible="product_id.tracking == 'none'"
                                    string="Lot / Serial Number"/>
                         </group>
                     </group>
