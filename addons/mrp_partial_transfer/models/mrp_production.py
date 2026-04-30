@@ -27,16 +27,16 @@ class MrpProduction(models.Model):
     )
 
     @api.depends('move_finished_ids', 'move_finished_ids.state',
-                 'move_finished_ids.quantity_done', 'product_qty')
+                 'move_finished_ids.quantity', 'product_qty')
     def _compute_qty_transferred_to_stock(self):
         for production in self:
-            # Sum quantity_done on finished moves that are in 'done' state
-            # and relate to the main finished product (not byproducts)
+            # In Odoo 17+, 'quantity' replaces 'quantity_done' on stock.move.
+            # For done moves, 'quantity' holds the validated amount.
             done_moves = production.move_finished_ids.filtered(
                 lambda m: m.state == 'done'
                 and m.product_id == production.product_id
             )
-            transferred = sum(done_moves.mapped('quantity_done'))
+            transferred = sum(done_moves.mapped('quantity'))
             production.qty_transferred_to_stock = transferred
             production.qty_remaining_to_produce = max(
                 0.0, production.product_qty - transferred

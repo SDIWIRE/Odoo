@@ -131,8 +131,9 @@ class MrpPartialTransferWizard(models.TransientModel):
             move_to_validate = finished_move
             move_to_validate.location_dest_id = self.location_dest_id
 
-        # ── Step 3: Set quantity_done and lot if provided ────────────────────
-        move_to_validate.quantity_done = self.qty_to_transfer
+        # ── Step 3: Set quantity and lot if provided ─────────────────────────
+        # In Odoo 17+, 'quantity' replaces 'quantity_done' on stock.move
+        move_to_validate.quantity = self.qty_to_transfer
 
         # Handle lot/serial tracking
         if self.lot_id or production.product_id.tracking != 'none':
@@ -141,11 +142,12 @@ class MrpPartialTransferWizard(models.TransientModel):
                 move_to_validate._action_assign()
 
             for ml in move_to_validate.move_line_ids:
-                ml.qty_done = self.qty_to_transfer
+                ml.quantity = self.qty_to_transfer
                 if self.lot_id:
                     ml.lot_id = self.lot_id
         else:
-            # No tracking — just set qty_done directly on the move line
+            # No tracking — set quantity on the move line
+            # In Odoo 17+, 'quantity' replaces 'qty_done' on stock.move.line
             if not move_to_validate.move_line_ids:
                 move_to_validate._action_assign()
                 if not move_to_validate.move_line_ids:
@@ -154,12 +156,12 @@ class MrpPartialTransferWizard(models.TransientModel):
                         'move_id': move_to_validate.id,
                         'product_id': move_to_validate.product_id.id,
                         'product_uom_id': move_to_validate.product_uom.id,
-                        'qty_done': self.qty_to_transfer,
+                        'quantity': self.qty_to_transfer,
                         'location_id': move_to_validate.location_id.id,
                         'location_dest_id': self.location_dest_id.id,
                     })
             else:
-                move_to_validate.move_line_ids[0].qty_done = self.qty_to_transfer
+                move_to_validate.move_line_ids[0].quantity = self.qty_to_transfer
 
         # ── Step 4: Validate ONLY this move (not the whole MO) ───────────────
         move_to_validate._action_done()
@@ -185,11 +187,13 @@ class MrpPartialTransferWizard(models.TransientModel):
             else:
                 raw_move_to_validate = raw_move
 
-            raw_move_to_validate.quantity_done = qty_to_consume
+            raw_move_to_validate.quantity = qty_to_consume
             if not raw_move_to_validate.move_line_ids:
                 raw_move_to_validate._action_assign()
             for ml in raw_move_to_validate.move_line_ids:
-                ml.qty_done = ml.reserved_uom_qty or qty_to_consume
+                # reserved_uom_qty is still the correct field name in Odoo 19
+                # for the reserved quantity on a move line
+                ml.quantity = ml.reserved_uom_qty or qty_to_consume
 
             raw_move_to_validate._action_done()
 
