@@ -135,8 +135,6 @@ class MrpPartialTransferWizard(models.TransientModel):
             'origin': production.name,
             'company_id': production.company_id.id,
             'state': 'draft',
-            'group_id': production.procurement_group_id.id
-                if production.procurement_group_id else False,
         }
         partial_move = self.env['stock.move'].create(move_vals)
         partial_move._action_confirm()
