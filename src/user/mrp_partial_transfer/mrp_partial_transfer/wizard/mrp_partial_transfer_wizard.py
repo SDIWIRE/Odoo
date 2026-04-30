@@ -200,7 +200,8 @@ class MrpPartialTransferWizard(models.TransientModel):
 
             if raw_move.move_line_ids:
                 for ml in raw_move.move_line_ids:
-                    ml.quantity = ml.reserved_uom_qty or qty_to_consume
+                    # quantity_product_uom is the reserved qty field in Odoo 17+
+                    ml.quantity = ml.quantity_product_uom or qty_to_consume
                 raw_move._action_done()
             else:
                 self.env['stock.move.line'].create({
