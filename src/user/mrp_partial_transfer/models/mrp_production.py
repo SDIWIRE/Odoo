@@ -6,24 +6,29 @@ from odoo.exceptions import UserError
 class MrpProduction(models.Model):
     _inherit = 'mrp.production'
 
+    # Stored float — written directly by the wizard each time a partial
+    # transfer is confirmed. Not computed, because our transfers go through
+    # a separate picking and don't touch move_finished_ids.
     qty_transferred_to_stock = fields.Float(
-        string='Qty Transferred to Stock',
-        compute='_compute_qty_transferred_to_stock',
+        string='Transferred to Stock',
         store=True,
-        help='Total quantity of finished goods already transferred to stock '
+        default=0.0,
+        digits='Product Unit of Measure',
+        help='Cumulative quantity of finished goods transferred to stock '
              'via partial transfers while this MO was still open.',
     )
 
     qty_remaining_to_produce = fields.Float(
-        string='Qty Remaining to Produce',
-        compute='_compute_qty_transferred_to_stock',
+        string='Remaining to Produce',
+        compute='_compute_partial_transfer_fields',
         store=True,
+        digits='Product Unit of Measure',
         help='Remaining quantity still to be produced and transferred.',
     )
 
     qty_progress_pct = fields.Float(
-        string='Transfer Progress (%)',
-        compute='_compute_qty_transferred_to_stock',
+        string='% Complete',
+        compute='_compute_partial_transfer_fields',
         store=True,
         digits=(5, 1),
         help='Percentage of total demand already transferred to stock.',
@@ -31,41 +36,23 @@ class MrpProduction(models.Model):
 
     show_partial_transfer_button = fields.Boolean(
         string='Show Partial Transfer Button',
-        compute='_compute_show_partial_transfer_button',
+        compute='_compute_partial_transfer_fields',
     )
 
-    @api.depends('move_finished_ids', 'move_finished_ids.state',
-                 'move_finished_ids.quantity', 'product_qty')
-    def _compute_qty_transferred_to_stock(self):
+    @api.depends('qty_transferred_to_stock', 'product_qty', 'state')
+    def _compute_partial_transfer_fields(self):
         for production in self:
-            # In Odoo 17+, 'quantity' replaces 'quantity_done' on stock.move.
-            # For done moves, 'quantity' holds the validated amount.
-            done_moves = production.move_finished_ids.filtered(
-                lambda m: m.state == 'done'
-                and m.product_id == production.product_id
-            )
-            transferred = sum(done_moves.mapped('quantity'))
-            production.qty_transferred_to_stock = transferred
-            production.qty_remaining_to_produce = max(
-                0.0, production.product_qty - transferred
-            )
-            if production.product_qty:
-                production.qty_progress_pct = min(
-                    100.0, (transferred / production.product_qty) * 100.0
-                )
-            else:
-                production.qty_progress_pct = 0.0
-
-    @api.depends('state', 'qty_remaining_to_produce', 'product_qty')
-    def _compute_show_partial_transfer_button(self):
-        for production in self:
+            transferred = production.qty_transferred_to_stock
+            demand = production.product_qty or 0.0
+            remaining = max(0.0, demand - transferred)
+            production.qty_remaining_to_produce = remaining
+            production.qty_progress_pct = min(100.0, (transferred / demand * 100.0)) if demand else 0.0
             production.show_partial_transfer_button = (
                 production.state in ('confirmed', 'progress')
-                and production.qty_remaining_to_produce > 0
+                and remaining > 0
             )
 
     def action_partial_transfer_to_stock(self):
-        """Open the wizard to transfer a partial quantity to stock."""
         self.ensure_one()
         if self.state not in ('confirmed', 'progress'):
             raise UserError(_(
@@ -75,9 +62,8 @@ class MrpProduction(models.Model):
         if self.qty_remaining_to_produce <= 0:
             raise UserError(_(
                 'There is no remaining quantity to transfer. '
-                'Please validate the Manufacturing Order to close it.'
+                'The Manufacturing Order is already fully transferred.'
             ))
-
         return {
             'name': _('Transfer Partial Quantity to Stock'),
             'type': 'ir.actions.act_window',

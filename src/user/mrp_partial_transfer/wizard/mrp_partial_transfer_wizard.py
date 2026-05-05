@@ -177,9 +177,12 @@ class MrpPartialTransferWizard(models.TransientModel):
         # ── Step 5: Validate picking → goods land in inventory immediately ────
         picking.with_context(skip_backorder=True).button_validate()
 
-        # ── Step 6: Update MO qty_producing for internal progress tracking ────
+        # ── Step 6: Update transferred qty on the MO (drives running total) ───
         already_produced = production.qty_transferred_to_stock
         new_total = already_produced + self.qty_to_transfer
+        production.write({'qty_transferred_to_stock': new_total})
+
+        # Also update qty_producing for Odoo's internal progress tracking
         try:
             production.write({'qty_producing': new_total})
         except Exception as e:
