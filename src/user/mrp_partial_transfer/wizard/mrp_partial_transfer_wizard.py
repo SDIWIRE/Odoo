@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from odoo import models, fields, api, _
 from odoo.exceptions import UserError
+from odoo.tools import float_compare
 import logging
 
 _logger = logging.getLogger(__name__)
@@ -215,33 +216,78 @@ class MrpPartialTransferWizard(models.TransientModel):
                 })
                 raw_move._action_done()
 
-        # ── Step 8: Ensure MO stays open if remaining qty > 0 ────────────────
-        if production.state == 'done':
-            remaining = production.qty_remaining_to_produce
-            if remaining > 0:
+        # ── Step 8: Auto-close or keep open depending on remaining qty ──────────
+        total_so_far = already_produced + self.qty_to_transfer
+        remaining_after = production.product_qty - total_so_far
+
+        rounding = production.product_uom_id.rounding
+
+        if float_compare(remaining_after, 0, precision_rounding=rounding) <= 0:
+            # ── All demand has been transferred — close the MO ────────────────
+            _logger.info(
+                'MO %s fully transferred (%s %s). Auto-closing.',
+                production.name, total_so_far, production.product_uom_id.name,
+            )
+            # Cancel any remaining open stock moves on the MO so it can close
+            open_finished = production.move_finished_ids.filtered(
+                lambda m: m.state not in ('done', 'cancel')
+            )
+            if open_finished:
+                open_finished.write({'state': 'cancel'})
+
+            open_raw = production.move_raw_ids.filtered(
+                lambda m: m.state not in ('done', 'cancel')
+            )
+            if open_raw:
+                open_raw.write({'state': 'cancel'})
+
+            production.write({
+                'state': 'done',
+                'date_finished': fields.Datetime.now(),
+            })
+
+            production.message_post(
+                body=_(
+                    '<b>Partial Transfer to Stock — Order Complete</b><br/>'
+                    'Final transfer: <b>%(qty)s %(uom)s</b> of <b>%(product)s</b> '
+                    'to <b>%(location)s</b> via picking <b>%(picking)s</b>.<br/>'
+                    'Total transferred: <b>%(total)s of %(demand)s %(uom)s</b>.<br/>'
+                    'Manufacturing Order has been automatically closed.',
+                    qty=self.qty_to_transfer,
+                    uom=self.product_uom_id.name,
+                    product=self.product_id.display_name,
+                    location=self.location_dest_id.complete_name,
+                    picking=picking.name,
+                    total=total_so_far,
+                    demand=production.product_qty,
+                )
+            )
+        else:
+            # ── Still more to produce — keep the MO open ──────────────────────
+            if production.state == 'done':
                 production.write({'state': 'progress'})
                 _logger.info(
                     'MO %s forced back to progress. Remaining: %s %s',
-                    production.name, remaining, production.product_uom_id.name,
+                    production.name, remaining_after, production.product_uom_id.name,
                 )
 
-        # ── Step 9: Log chatter note ──────────────────────────────────────────
-        total_so_far = already_produced + self.qty_to_transfer
-        production.message_post(
-            body=_(
-                '<b>Partial Transfer to Stock</b><br/>'
-                'Transferred <b>%(qty)s %(uom)s</b> of <b>%(product)s</b> '
-                'to <b>%(location)s</b> via picking <b>%(picking)s</b>.<br/>'
-                'Total produced so far: <b>%(total)s</b> of '
-                '<b>%(demand)s %(uom)s</b> demanded.',
-                qty=self.qty_to_transfer,
-                uom=self.product_uom_id.name,
-                product=self.product_id.display_name,
-                location=self.location_dest_id.complete_name,
-                picking=picking.name,
-                total=total_so_far,
-                demand=production.product_qty,
+            production.message_post(
+                body=_(
+                    '<b>Partial Transfer to Stock</b><br/>'
+                    'Transferred <b>%(qty)s %(uom)s</b> of <b>%(product)s</b> '
+                    'to <b>%(location)s</b> via picking <b>%(picking)s</b>.<br/>'
+                    'Total produced so far: <b>%(total)s</b> of '
+                    '<b>%(demand)s %(uom)s</b> demanded. '
+                    'Remaining: <b>%(remaining)s %(uom)s</b>.',
+                    qty=self.qty_to_transfer,
+                    uom=self.product_uom_id.name,
+                    product=self.product_id.display_name,
+                    location=self.location_dest_id.complete_name,
+                    picking=picking.name,
+                    total=total_so_far,
+                    demand=production.product_qty,
+                    remaining=remaining_after,
+                )
             )
-        )
 
         return {'type': 'ir.actions.act_window_close'}

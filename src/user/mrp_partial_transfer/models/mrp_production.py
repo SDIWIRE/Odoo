@@ -21,6 +21,14 @@ class MrpProduction(models.Model):
         help='Remaining quantity still to be produced and transferred.',
     )
 
+    qty_progress_pct = fields.Float(
+        string='Transfer Progress (%)',
+        compute='_compute_qty_transferred_to_stock',
+        store=True,
+        digits=(5, 1),
+        help='Percentage of total demand already transferred to stock.',
+    )
+
     show_partial_transfer_button = fields.Boolean(
         string='Show Partial Transfer Button',
         compute='_compute_show_partial_transfer_button',
@@ -41,6 +49,12 @@ class MrpProduction(models.Model):
             production.qty_remaining_to_produce = max(
                 0.0, production.product_qty - transferred
             )
+            if production.product_qty:
+                production.qty_progress_pct = min(
+                    100.0, (transferred / production.product_qty) * 100.0
+                )
+            else:
+                production.qty_progress_pct = 0.0
 
     @api.depends('state', 'qty_remaining_to_produce', 'product_qty')
     def _compute_show_partial_transfer_button(self):
