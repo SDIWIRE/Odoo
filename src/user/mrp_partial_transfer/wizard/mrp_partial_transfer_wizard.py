@@ -231,19 +231,8 @@ class MrpPartialTransferWizard(models.TransientModel):
                 'MO %s fully transferred (%s %s). Auto-closing.',
                 production.name, total_so_far, production.product_uom_id.name,
             )
-            # Cancel any remaining open stock moves on the MO so it can close
-            open_finished = production.move_finished_ids.filtered(
-                lambda m: m.state not in ('done', 'cancel')
-            )
-            if open_finished:
-                open_finished.write({'state': 'cancel'})
-
-            open_raw = production.move_raw_ids.filtered(
-                lambda m: m.state not in ('done', 'cancel')
-            )
-            if open_raw:
-                open_raw.write({'state': 'cancel'})
-
+            # Write state to done directly — do NOT cancel open moves first,
+            # as that causes Odoo to treat the MO as cancelled instead of done.
             production.write({
                 'state': 'done',
                 'date_finished': fields.Datetime.now(),
