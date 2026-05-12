@@ -17,7 +17,7 @@
                         type="action"
                         class="oe_stat_button"
                         icon="fa-users"
-                        context="{'default_workcenter_id': active_id, 'search_default_workcenter_id': active_id}">
+                        context="{'default_workcenter_id': id, 'search_default_workcenter_id': id}">
                     <field name="worker_slot_count" widget="statinfo" string="Worker Slots"/>
                 </button>
             </xpath>
