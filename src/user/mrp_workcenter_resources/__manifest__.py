@@ -17,8 +17,8 @@
     'depends': ['mrp', 'mrp_workorder'],
     'data': [
         'security/ir.model.access.csv',
-        'views/mrp_workcenter_views.xml',
         'views/mrp_workcenter_resource_views.xml',
+        'views/mrp_workcenter_views.xml',
     ],
     'installable': True,
     'application': False,

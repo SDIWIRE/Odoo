@@ -1,39 +1,27 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-    <!-- ============================================================
-         Work Center Form View — add Number of Workers field
-         ============================================================ -->
+    <!-- Work Center Form: add Number of Workers field + Worker Slots tab -->
     <record id="view_mrp_workcenter_form_inherit_workers" model="ir.ui.view">
         <field name="name">mrp.workcenter.form.inherit.workers</field>
         <field name="model">mrp.workcenter</field>
         <field name="inherit_id" ref="mrp.mrp_workcenter_view"/>
         <field name="arch" type="xml">
 
-            <!-- Insert number_of_workers right after time_efficiency in the
-                 General Information / Production Information section. -->
             <xpath expr="//field[@name='time_efficiency']" position="after">
-                <field
-                    name="number_of_workers"
-                    widget="integer"
-                    attrs="{'readonly': [('id', '=', False)]}"
-                />
+                <field name="number_of_workers"/>
             </xpath>
 
-            <!-- Stat button showing how many resource slots are configured. -->
             <xpath expr="//div[@name='button_box']" position="inside">
-                <button
-                    name="%(mrp_workcenter_resources.action_mrp_workcenter_worker_resource)d"
-                    type="action"
-                    class="oe_stat_button"
-                    icon="fa-users"
-                    context="{'default_workcenter_id': active_id, 'search_default_workcenter_id': active_id}"
-                >
+                <button name="%(mrp_workcenter_resources.action_mrp_workcenter_worker_resource)d"
+                        type="action"
+                        class="oe_stat_button"
+                        icon="fa-users"
+                        context="{'default_workcenter_id': active_id, 'search_default_workcenter_id': active_id}">
                     <field name="worker_slot_count" widget="statinfo" string="Worker Slots"/>
                 </button>
             </xpath>
 
-            <!-- Worker Resource Slots tab (detailed view of each slot). -->
             <xpath expr="//notebook" position="inside">
                 <page string="Worker Slots" name="worker_slots">
                     <group>
@@ -41,22 +29,20 @@
                             <field name="number_of_workers"/>
                         </group>
                         <group>
-                            <button
-                                name="action_sync_worker_resources"
-                                string="Sync Slots"
-                                type="object"
-                                class="btn-secondary"
-                                help="Create or remove resource slots to match the configured number of workers."
-                            />
+                            <button name="action_sync_worker_resources"
+                                    string="Sync Slots"
+                                    type="object"
+                                    class="btn-secondary"
+                                    help="Create or remove resource slots to match the configured number of workers."/>
                         </group>
                     </group>
                     <field name="worker_resource_ids" nolabel="1">
-                        <tree editable="bottom" create="0" delete="0">
+                        <list editable="bottom" create="0" delete="0">
                             <field name="sequence" widget="handle"/>
                             <field name="name" readonly="1"/>
                             <field name="resource_id" readonly="1"/>
                             <field name="active"/>
-                        </tree>
+                        </list>
                     </field>
                     <p class="text-muted">
                         Change <strong>Number of Workers</strong> above and save to automatically
@@ -69,35 +55,14 @@
         </field>
     </record>
 
-    <!-- ============================================================
-         Work Center List View — show worker count column
-         ============================================================ -->
+    <!-- Work Center List: add a Workers column -->
     <record id="view_mrp_workcenter_tree_inherit_workers" model="ir.ui.view">
-        <field name="name">mrp.workcenter.tree.inherit.workers</field>
+        <field name="name">mrp.workcenter.list.inherit.workers</field>
         <field name="model">mrp.workcenter</field>
         <field name="inherit_id" ref="mrp.mrp_workcenter_tree_view"/>
         <field name="arch" type="xml">
             <xpath expr="//field[@name='time_efficiency']" position="after">
                 <field name="number_of_workers" string="Workers" optional="show"/>
-            </xpath>
-        </field>
-    </record>
-
-    <!-- ============================================================
-         Work Order Form View — show assigned worker slot
-         ============================================================ -->
-    <record id="view_mrp_workorder_form_inherit_worker_slot" model="ir.ui.view">
-        <field name="name">mrp.workorder.form.inherit.worker.slot</field>
-        <field name="model">mrp.workorder</field>
-        <field name="inherit_id" ref="mrp_workorder.mrp_workorder_view_form"/>
-        <field name="arch" type="xml">
-            <xpath expr="//field[@name='workcenter_id']" position="after">
-                <field
-                    name="worker_resource_id"
-                    readonly="1"
-                    optional="show"
-                    attrs="{'invisible': [('worker_resource_id', '=', False)]}"
-                />
             </xpath>
         </field>
     </record>

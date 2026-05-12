@@ -1,83 +1,26 @@
 <?xml version="1.0" encoding="utf-8"?>
 <odoo>
 
-    <!-- ============================================================
-         Worker Resource Slot model views
-         ============================================================ -->
+    <!-- Worker Resource Slot list view -->
     <record id="view_mrp_workcenter_worker_resource_tree" model="ir.ui.view">
-        <field name="name">mrp.workcenter.worker.resource.tree</field>
+        <field name="name">mrp.workcenter.worker.resource.list</field>
         <field name="model">mrp.workcenter.worker.resource</field>
         <field name="arch" type="xml">
-            <tree string="Worker Resource Slots" editable="bottom">
+            <list string="Worker Resource Slots" editable="bottom">
                 <field name="sequence" widget="handle"/>
                 <field name="workcenter_id" optional="show"/>
                 <field name="name" optional="show"/>
                 <field name="resource_id" optional="show"/>
                 <field name="active" optional="show"/>
-            </tree>
+            </list>
         </field>
     </record>
 
-    <!-- ============================================================
-         Management list view:  Configuration > Work Center Workers
-         Shows all work centers with their worker counts.
-         Inline-editable number_of_workers for quick adjustments.
-         ============================================================ -->
-    <record id="view_mrp_workcenter_workers_management_tree" model="ir.ui.view">
-        <field name="name">mrp.workcenter.workers.management.tree</field>
-        <field name="model">mrp.workcenter</field>
-        <field name="arch" type="xml">
-            <tree
-                string="Work Center Workers"
-                editable="bottom"
-                multi_edit="1"
-                decoration-warning="worker_slot_count != number_of_workers"
-            >
-                <field name="name" readonly="1"/>
-                <field name="code" readonly="1" optional="show"/>
-                <field name="time_efficiency" readonly="1" optional="show"/>
-                <field name="number_of_workers" string="Workers (target)"/>
-                <field name="worker_slot_count" string="Slots configured" readonly="1"/>
-                <button
-                    name="action_sync_worker_resources"
-                    string="Sync"
-                    type="object"
-                    icon="fa-refresh"
-                    help="Sync resource slots to match the target worker count."
-                    attrs="{'invisible': [('worker_slot_count', '=', number_of_workers)]}"
-                />
-            </tree>
-        </field>
-    </record>
-
-    <record id="action_mrp_workcenter_workers_management" model="ir.actions.act_window">
-        <field name="name">Work Center Workers</field>
-        <field name="res_model">mrp.workcenter</field>
-        <field name="view_mode">tree,form</field>
-        <field name="views">
-            [(ref('view_mrp_workcenter_workers_management_tree'), 'tree'),
-             (False, 'form')]
-        </field>
-        <field name="help" type="html">
-            <p class="o_view_nocontent_smiling_face">
-                No work centers found.
-            </p>
-            <p>
-                Set the number of workers on each work center so the scheduler
-                knows how many jobs can run simultaneously.
-            </p>
-        </field>
-    </record>
-
-    <!-- ============================================================
-         Worker Resource Slot action  (used by the stat button)
-         ============================================================ -->
+    <!-- Worker Resource Slot action (used by stat button on work center form) -->
     <record id="action_mrp_workcenter_worker_resource" model="ir.actions.act_window">
         <field name="name">Worker Resource Slots</field>
         <field name="res_model">mrp.workcenter.worker.resource</field>
-        <field name="view_mode">tree</field>
-        <field name="views">[(ref('view_mrp_workcenter_worker_resource_tree'), 'tree')]</field>
-        <field name="context">{'search_default_workcenter_id': active_id}</field>
+        <field name="view_mode">list</field>
         <field name="help" type="html">
             <p class="o_view_nocontent_smiling_face">
                 No worker slots yet.
@@ -89,15 +32,49 @@
         </field>
     </record>
 
-    <!-- ============================================================
-         Menu entry under Manufacturing > Configuration
-         ============================================================ -->
-    <menuitem
-        id="menu_mrp_workcenter_workers"
-        name="Work Center Workers"
-        parent="mrp.menu_mrp_configuration"
-        action="action_mrp_workcenter_workers_management"
-        sequence="25"
-    />
+    <!-- Management list: Manufacturing > Configuration > Work Center Workers -->
+    <record id="view_mrp_workcenter_workers_management_tree" model="ir.ui.view">
+        <field name="name">mrp.workcenter.workers.management.list</field>
+        <field name="model">mrp.workcenter</field>
+        <field name="arch" type="xml">
+            <list string="Work Center Workers"
+                  editable="bottom"
+                  multi_edit="1"
+                  decoration-warning="worker_slot_count != number_of_workers">
+                <field name="name" readonly="1"/>
+                <field name="code" readonly="1" optional="show"/>
+                <field name="time_efficiency" readonly="1" optional="show"/>
+                <field name="number_of_workers" string="Workers (target)"/>
+                <field name="worker_slot_count" string="Slots configured" readonly="1"/>
+                <button name="action_sync_worker_resources"
+                        string="Sync"
+                        type="object"
+                        icon="fa-refresh"
+                        help="Sync resource slots to match the target worker count."/>
+            </list>
+        </field>
+    </record>
+
+    <record id="action_mrp_workcenter_workers_management" model="ir.actions.act_window">
+        <field name="name">Work Center Workers</field>
+        <field name="res_model">mrp.workcenter</field>
+        <field name="view_mode">list,form</field>
+        <field name="view_id" ref="view_mrp_workcenter_workers_management_tree"/>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">
+                No work centers found.
+            </p>
+            <p>
+                Set the number of workers on each work center so the scheduler
+                knows how many jobs can run simultaneously.
+            </p>
+        </field>
+    </record>
+
+    <menuitem id="menu_mrp_workcenter_workers"
+              name="Work Center Workers"
+              parent="mrp.menu_mrp_configuration"
+              action="action_mrp_workcenter_workers_management"
+              sequence="25"/>
 
 </odoo>
