@@ -127,7 +127,7 @@ class MrpWorkcenter(models.Model):
                 slot_name = '%s – Worker %d' % (self.name, i + 1)
                 resource = self.env['resource.resource'].create({
                     'name': slot_name,
-                    'resource_type': 'human',
+                    'resource_type': 'user',
                     'calendar_id': self.resource_calendar_id.id if self.resource_calendar_id else False,
                     'company_id': self.company_id.id if self.company_id else False,
                     'time_efficiency': self.time_efficiency or 100.0,
