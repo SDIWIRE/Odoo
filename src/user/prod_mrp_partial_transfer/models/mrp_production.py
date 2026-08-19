@@ -6,9 +6,7 @@ from odoo.exceptions import UserError
 class MrpProduction(models.Model):
     _inherit = 'mrp.production'
 
-    # Stored float — written directly by the wizard each time a partial
-    # transfer is confirmed. Not computed, because our transfers go through
-    # a separate picking and don't touch move_finished_ids.
+    # Written directly by the wizard after each partial transfer
     qty_transferred_to_stock = fields.Float(
         string='Transferred to Stock',
         store=True,
@@ -18,35 +16,42 @@ class MrpProduction(models.Model):
              'via partial transfers while this MO was still open.',
     )
 
+    # Stored computed fields — share one compute method, both store=True
     qty_remaining_to_produce = fields.Float(
         string='Remaining to Produce',
-        compute='_compute_partial_transfer_fields',
+        compute='_compute_stored_transfer_fields',
         store=True,
         digits='Product Unit of Measure',
-        help='Remaining quantity still to be produced and transferred.',
     )
-
     qty_progress_pct = fields.Float(
         string='% Complete',
-        compute='_compute_partial_transfer_fields',
+        compute='_compute_stored_transfer_fields',
         store=True,
         digits=(5, 1),
-        help='Percentage of total demand already transferred to stock.',
     )
 
+    # Non-stored computed field — separate compute method to avoid
+    # Odoo 19 warning about inconsistent store/compute_sudo on shared methods
     show_partial_transfer_button = fields.Boolean(
         string='Show Partial Transfer Button',
-        compute='_compute_partial_transfer_fields',
+        compute='_compute_show_partial_transfer_button',
+        store=False,
     )
 
+    @api.depends('qty_transferred_to_stock', 'product_qty')
+    def _compute_stored_transfer_fields(self):
+        for production in self:
+            transferred = production.qty_transferred_to_stock
+            demand = production.product_qty or 0.0
+            production.qty_remaining_to_produce = max(0.0, demand - transferred)
+            production.qty_progress_pct = min(100.0, (transferred / demand * 100.0)) if demand else 0.0
+
     @api.depends('qty_transferred_to_stock', 'product_qty', 'state')
-    def _compute_partial_transfer_fields(self):
+    def _compute_show_partial_transfer_button(self):
         for production in self:
             transferred = production.qty_transferred_to_stock
             demand = production.product_qty or 0.0
             remaining = max(0.0, demand - transferred)
-            production.qty_remaining_to_produce = remaining
-            production.qty_progress_pct = min(100.0, (transferred / demand * 100.0)) if demand else 0.0
             production.show_partial_transfer_button = (
                 production.state in ('confirmed', 'progress')
                 and remaining > 0
