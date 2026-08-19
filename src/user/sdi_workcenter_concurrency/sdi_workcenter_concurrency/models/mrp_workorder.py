@@ -25,10 +25,21 @@ class MrpWorkorder(models.Model):
         for every work center that hasn't opted into concurrency.
         """
         conflicts = super()._get_conflicted_workorder_ids()
-        capacity_by_wo = {wo.id: (wo.workcenter_id.concurrent_capacity or 1) for wo in self}
+        if not conflicts:
+            return conflicts
+        # Key by the *real* database id, which is what super()'s SQL returns.
+        # In an onchange (e.g. adding a work order to a saved MO) the records in
+        # self are virtual: wo.id is a NewId and only wo._origin.id holds the
+        # real id, so keying on wo.id would never match super()'s keys.
+        capacity_by_wo = {}
+        for wo in self:
+            real_id = wo._origin.id or wo.id
+            capacity_by_wo[real_id] = wo.workcenter_id.concurrent_capacity or 1
         # Preserve core's defaultdict(list) return type so callers relying on
-        # auto-[] for non-conflicted ids keep working.
+        # auto-[] for non-conflicted ids keep working. Default to 1 for any id
+        # we can't map, so an unexpected key degrades to core behavior (flag the
+        # conflict) instead of raising.
         return defaultdict(list, {
             wo_id: others for wo_id, others in conflicts.items()
-            if len(others) >= capacity_by_wo[wo_id]
+            if len(others) >= capacity_by_wo.get(wo_id, 1)
         })
