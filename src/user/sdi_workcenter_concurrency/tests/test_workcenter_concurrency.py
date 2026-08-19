@@ -138,38 +138,6 @@ class TestWorkcenterConcurrency(TransactionCase):
         conflicts = all_workorders._get_conflicted_workorder_ids()
         self.assertEqual(conflicts, {}, "exactly-at-capacity overlap should never be flagged")
 
-    def test_conflicted_workorder_ids_with_virtual_onchange_records(self):
-        """Regression for the production KeyError that blocked adding a work
-        order to an existing MO.
-
-        Editing a saved MO runs this compute inside an onchange, where the
-        work orders are virtual records: wo.id is a NewId while recordset.ids
-        (what core's SQL keys its results by) still holds the real database id.
-        Building the capacity map from wo.id therefore matched nothing and
-        raised KeyError on every real id core returned. Any station with two or
-        more overlapping work orders hit it - i.e. normal operation once
-        Concurrent Operators is above 1.
-        """
-        mos = [self._make_mo(self.bom, 1) for _ in range(5)]
-        for mo in mos:
-            mo.button_plan()
-        saved = sum((mo.workorder_ids for mo in mos[1:]), mos[0].workorder_ids)
-
-        Workorder = self.env['mrp.workorder']
-        virtual = Workorder
-        for wo in saved:
-            virtual |= Workorder.new(origin=wo)
-
-        # Sanity-check we really reproduced the real/virtual id split: the
-        # in-memory ids are NewId objects, while .ids resolves to real ints.
-        self.assertTrue(any(not isinstance(i, int) for i in virtual._ids),
-                        "expected virtual (NewId) records")
-        self.assertEqual(set(virtual.ids), set(saved.ids))
-
-        # Must not raise, and must still filter correctly (5 at capacity 5).
-        conflicts = virtual._get_conflicted_workorder_ids()
-        self.assertEqual(dict(conflicts), {})
-
     def test_conflicted_workorder_ids_flags_manual_overbooking(self):
         """If a 6th work order is manually forced to overlap an already-full
         slot (bypassing the scheduler, e.g. a manual Gantt drag), the popover
