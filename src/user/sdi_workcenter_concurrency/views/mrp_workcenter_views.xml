@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="mrp_workcenter_view_concurrency" model="ir.ui.view">
+        <field name="name">mrp.workcenter.form.concurrency</field>
+        <field name="model">mrp.workcenter</field>
+        <field name="inherit_id" ref="mrp.mrp_workcenter_view"/>
+        <field name="arch" type="xml">
+            <xpath expr="//div[field[@name='oee_target']]" position="after">
+                <label for="concurrent_capacity"/>
+                <div class="o_row">
+                    <field name="concurrent_capacity"/>
+                </div>
+            </xpath>
+        </field>
+    </record>
+</odoo>
