@@ -127,32 +127,9 @@ class MrpPartialTransferWizard(models.TransientModel):
         except Exception as e:
             _logger.warning('Could not update qty_producing on MO %s: %s', production.name, e)
 
-        # ── Step 7: Proportionally consume raw material components ────────────
-        fraction = self.qty_to_transfer / production.product_qty
-        for raw_move in production.move_raw_ids.filtered(lambda m: m.state not in ('done', 'cancel')):
-            qty_to_consume = round(raw_move.product_uom_qty * fraction, 10)
-            if qty_to_consume <= 0:
-                continue
-            qty_to_consume = min(qty_to_consume, raw_move.product_uom_qty)
-            if not raw_move.move_line_ids:
-                raw_move._action_assign()
-            if raw_move.move_line_ids:
-                for ml in raw_move.move_line_ids:
-                    ml.quantity = ml.quantity_product_uom or qty_to_consume
-                raw_move._action_done()
-            else:
-                self.env['stock.move.line'].create({
-                    'move_id': raw_move.id,
-                    'product_id': raw_move.product_id.id,
-                    'product_uom_id': raw_move.product_uom.id,
-                    'quantity': qty_to_consume,
-                    'location_id': raw_move.location_id.id,
-                    'location_dest_id': raw_move.location_dest_id.id,
-                    'company_id': production.company_id.id,
-                })
-                raw_move._action_done()
-
-        # ── Step 8: Auto-close or keep open ──────────────────────────────────
+        # ── Step 7: Auto-close or keep open ──────────────────────────────────
+        # Note: component consumption is intentionally left to Odoo's standard
+        # MO process. The partial transfer only moves finished goods to stock.
         rounding = production.product_uom_id.rounding
         remaining_after = production.product_qty - new_total
 
