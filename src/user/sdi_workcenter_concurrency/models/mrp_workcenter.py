@@ -63,7 +63,12 @@ class MrpWorkcenter(models.Model):
         # Any other time_type='other' leave - calendar-wide ones (no resource) or
         # ones created by another module (e.g. maintenance downtime) - keeps core's
         # semantics: a full block regardless of concurrency.
-        occupancy_leave_ids = set(self.env['mrp.workorder'].search(
+        # sudo: whether a leave belongs to a work order is a factual
+        # classification, not user-scoped data. Without it, a work order the
+        # current user can't read (record rules / another company) would have its
+        # leave misread as a hard block, silently making a capacity-N station
+        # behave like capacity-1 for that window.
+        occupancy_leave_ids = set(self.env['mrp.workorder'].sudo().search(
             [('leave_id', 'in', leaves.ids)]).leave_id.ids) if leaves else set()
 
         # Sweep-line: net concurrency change at each distinct timestamp, clipped to

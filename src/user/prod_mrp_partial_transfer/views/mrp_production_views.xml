@@ -13,8 +13,7 @@
                         type="object"
                         class="btn-primary"
                         invisible="not show_partial_transfer_button"
-                        icon="fa-truck"
-                        help="Move a partial quantity of finished goods to stock now, keeping this order open for the remaining quantity."/>
+                        icon="fa-truck"/>
             </xpath>
 
             <!-- Hidden control fields -->
@@ -25,25 +24,15 @@
                 <field name="qty_remaining_to_produce" invisible="1"/>
             </xpath>
 
-            <!-- Running total — inject before the notebook (tabs) so it
-                 always appears between the header fields and the Components tab -->
+            <!-- Running total panel — injected before the notebook tabs -->
             <xpath expr="//notebook" position="before">
                 <group string="Transfer Progress"
                        invisible="qty_transferred_to_stock == 0"
                        col="4">
-                    <field name="qty_transferred_to_stock"
-                           readonly="1"
-                           string="Transferred to Stock"/>
-                    <field name="qty_remaining_to_produce"
-                           readonly="1"
-                           string="Remaining to Produce"/>
-                    <field name="product_qty"
-                           readonly="1"
-                           string="Total Ordered"/>
-                    <field name="qty_progress_pct"
-                           readonly="1"
-                           string="% Complete"
-                           widget="percentage"/>
+                    <field name="qty_transferred_to_stock" readonly="1" string="Transferred to Stock"/>
+                    <field name="qty_remaining_to_produce" readonly="1" string="Remaining to Produce"/>
+                    <field name="product_qty" readonly="1" string="Total Ordered"/>
+                    <field name="qty_progress_pct" readonly="1" string="% Complete" widget="percentage"/>
                 </group>
             </xpath>
 
