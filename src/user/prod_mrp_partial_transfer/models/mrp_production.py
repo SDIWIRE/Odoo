@@ -16,7 +16,7 @@ class MrpProduction(models.Model):
              'via partial transfers while this MO was still open.',
     )
 
-    # Stored computed fields — share one compute method, both store=True
+    # Stored computed fields — both store=True, same compute method
     qty_remaining_to_produce = fields.Float(
         string='Remaining to Produce',
         compute='_compute_stored_transfer_fields',
@@ -30,8 +30,7 @@ class MrpProduction(models.Model):
         digits=(5, 1),
     )
 
-    # Non-stored computed field — separate compute method to avoid
-    # Odoo 19 warning about inconsistent store/compute_sudo on shared methods
+    # Non-stored — separate compute method to avoid Odoo 19 store consistency warning
     show_partial_transfer_button = fields.Boolean(
         string='Show Partial Transfer Button',
         compute='_compute_show_partial_transfer_button',
