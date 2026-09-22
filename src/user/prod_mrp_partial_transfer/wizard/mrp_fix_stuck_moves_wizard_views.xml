@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="mrp_fix_stuck_moves_wizard_view_form" model="ir.ui.view">
+        <field name="name">mrp.fix.stuck.moves.wizard.form</field>
+        <field name="model">mrp.fix.stuck.moves.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Fix Stuck Raw Material Moves">
+                <sheet>
+                    <div class="alert alert-warning" role="alert"
+                         invisible="state != 'preview'">
+                        <strong>This will fix raw material stock moves stuck in
+                        ASSIGNED state on Manufacturing Orders that are already Done.</strong>
+                        Each stuck move will be validated, triggering proper SVL entries
+                        and unit cost calculation.
+                    </div>
+                    <div class="alert alert-success" role="alert"
+                         invisible="state != 'done'">
+                        <strong>Fix complete.</strong> See results below.
+                    </div>
+                    <group invisible="state != 'preview'">
+                        <field name="stuck_move_count" string="Stuck Moves Found" readonly="1"/>
+                        <field name="affected_mo_count" string="Affected Manufacturing Orders" readonly="1"/>
+                    </group>
+                    <group invisible="state != 'done'">
+                        <field name="result_summary" string="Result" readonly="1"
+                               widget="text" nolabel="1"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_fix"
+                            string="Fix Stuck Moves"
+                            type="object"
+                            class="btn-primary"
+                            invisible="state != 'preview'"
+                            data-hotkey="q"
+                            confirm="This will validate all stuck raw material moves. Continue?"/>
+                    <button string="Close"
+                            class="btn-secondary"
+                            special="cancel"
+                            data-hotkey="z"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Menu action to launch the wizard -->
+    <record id="action_mrp_fix_stuck_moves" model="ir.actions.act_window">
+        <field name="name">Fix Stuck Material Moves</field>
+        <field name="res_model">mrp.fix.stuck.moves.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <!-- Add to Manufacturing > Configuration menu -->
+    <menuitem id="menu_mrp_fix_stuck_moves"
+              name="Fix Stuck Material Moves"
+              parent="mrp.menu_mrp_configuration"
+              action="action_mrp_fix_stuck_moves"
+              groups="mrp.group_mrp_manager"
+              sequence="100"/>
+</odoo>

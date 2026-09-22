@@ -9,6 +9,7 @@
     'data': [
         'security/ir.model.access.csv',
         'wizard/mrp_partial_transfer_wizard_views.xml',
+        'wizard/mrp_fix_stuck_moves_wizard_views.xml',
         'views/mrp_production_views.xml',
     ],
     'installable': True,
