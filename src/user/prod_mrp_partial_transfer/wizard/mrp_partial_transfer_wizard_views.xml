@@ -28,7 +28,9 @@
                     <div class="alert alert-info" role="alert">
                         <p>This will move the specified quantity of finished goods into stock
                         <strong>immediately</strong>, while keeping the Manufacturing Order open
-                        for the remaining quantity. Components will be consumed proportionally.</p>
+                        for the remaining quantity. When the final quantity is transferred the
+                        MO will be closed automatically via Odoo's standard process so that
+                        unit costs and valuation entries are recorded correctly.</p>
                     </div>
                 </sheet>
                 <footer>

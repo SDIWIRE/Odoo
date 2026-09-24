@@ -1,0 +1,67 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="mrp_fix_stuck_moves_wizard_view_form" model="ir.ui.view">
+        <field name="name">mrp.fix.stuck.moves.wizard.form</field>
+        <field name="model">mrp.fix.stuck.moves.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Fix Stuck Raw Material Moves">
+                <sheet>
+                    <div class="alert alert-warning" role="alert" invisible="state != 'preview'">
+                        <strong>This will fix raw material stock moves stuck in ASSIGNED state
+                        on Done Manufacturing Orders.</strong> Moves are processed in batches
+                        of 50 — click "Fix Next Batch" repeatedly until complete.
+                    </div>
+                    <div class="alert alert-info" role="alert" invisible="state != 'in_progress'">
+                        <strong>In Progress</strong> — click "Fix Next Batch" to continue.
+                    </div>
+                    <div class="alert alert-success" role="alert" invisible="state != 'done'">
+                        <strong>All done!</strong>
+                    </div>
+                    <group invisible="state == 'done'">
+                        <field name="stuck_move_count" string="Stuck Moves Remaining" readonly="1"/>
+                        <field name="affected_mo_count" string="Affected Manufacturing Orders" readonly="1"
+                               invisible="state != 'preview'"/>
+                        <field name="fixed_count" string="Fixed So Far" readonly="1"
+                               invisible="state == 'preview'"/>
+                        <field name="error_count" string="Errors" readonly="1"
+                               invisible="state == 'preview'"/>
+                    </group>
+                    <group invisible="state != 'done'">
+                        <field name="fixed_count" string="Total Fixed" readonly="1"/>
+                        <field name="error_count" string="Total Errors" readonly="1"/>
+                    </group>
+                    <group invisible="result_summary == False or result_summary == ''">
+                        <field name="result_summary" string="Status" readonly="1"
+                               widget="text" nolabel="1"/>
+                    </group>
+                </sheet>
+                <footer>
+                    <button name="action_fix_batch"
+                            string="Fix Next Batch (50)"
+                            type="object"
+                            class="btn-primary"
+                            invisible="not has_more"
+                            data-hotkey="q"/>
+                    <button string="Close"
+                            class="btn-secondary"
+                            special="cancel"
+                            data-hotkey="z"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_mrp_fix_stuck_moves" model="ir.actions.act_window">
+        <field name="name">Fix Stuck Material Moves</field>
+        <field name="res_model">mrp.fix.stuck.moves.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <menuitem id="menu_mrp_fix_stuck_moves"
+              name="Fix Stuck Material Moves"
+              parent="mrp.menu_mrp_configuration"
+              action="action_mrp_fix_stuck_moves"
+              groups="mrp.group_mrp_manager"
+              sequence="100"/>
+</odoo>
