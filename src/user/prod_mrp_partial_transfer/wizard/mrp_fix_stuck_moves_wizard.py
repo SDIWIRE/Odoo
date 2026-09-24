@@ -83,6 +83,11 @@ class MrpFixStuckMovesWizard(models.TransientModel):
                         'company_id': move.company_id.id,
                     })
 
+                # In Odoo 18/19 a move must be marked 'picked' for _action_done()
+                # to validate it — without this the move is silently skipped and
+                # stays in 'assigned' state.
+                move.picked = True
+
                 move._action_done()
                 fixed += 1
 
