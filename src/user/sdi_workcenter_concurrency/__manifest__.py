@@ -1,6 +1,6 @@
 {
     'name': 'SDI Work Center Concurrency',
-    'version': '19.0.1.0.2',
+    'version': '19.0.1.0.3',
     'category': 'Manufacturing',
     'summary': 'Decouple work center scheduling concurrency from product-capacity duration math',
     'description': """

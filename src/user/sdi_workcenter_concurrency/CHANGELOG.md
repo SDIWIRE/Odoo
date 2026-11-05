@@ -1,6 +1,50 @@
 # Changelog
 
-## 19.0.1.0.2 — hotfix (not yet deployed)
+## 19.0.1.0.3 — hotfix (not yet deployed)
+
+### FIX (critical): work scheduled on nights and weekends
+
+`models/mrp_workcenter.py` — `_get_first_available_slot`
+
+**Symptom.** Replanned work orders on multi-operator stations landed outside
+working hours: BRAIDING and TESTING jobs chained back-to-back through Sunday
+night (11:26 → 17:33 → 22:40 → 23:12 → 01:19), each one's elapsed span exactly
+equal to its duration with no calendar gaps. Proven to be this module and not
+core by A/B on one work order: at `concurrent_capacity` 3 it was placed Sun
+08 Nov 22:40; at `concurrent_capacity` 1 (which delegates to `super()`) core
+placed the same work order Tue 17 Nov 09:35.
+
+**Cause.** This method is a full copy of core's, and **core changed underneath
+it**. Current core detects conflicts with `workorder_intervals.conflicting(interval)`
+and advances with `start = min(max(conflict_stop ...), stop)`. The copy in this
+module was taken from an earlier revision that used `interval & workorder_intervals`
+and `start = conflict._items[0]`.
+
+The missing piece is the `min(..., stop)` clamp. `stop` is the end of the
+current *working-hours* interval. Without it, `start` is assigned a timestamp
+taken from a leave interval, and leaves routinely span nights and weekends, so
+`start` escaped the working day and the returned slot went with it. Core's
+clamp keeps `start` inside the available interval.
+
+**Fix.** Both the forward and backward branches now match core's current
+implementation exactly. A re-diff confirms the only remaining differences are
+the three intended ones: the `concurrent_capacity <= 1` guard, the substitution
+of `_get_overcapacity_intervals` for core's leave lookup, and the records
+payload on `extra_leaves_slots_intervals`.
+
+**Also added:** `tools/check_core_drift.py`, which diffs this override against
+core's current source and exits non-zero on unexpected drift. This class of bug
+has now occurred once; run the tool after every Odoo upgrade. It is what found
+this one.
+
+### Data impact
+
+Any work order planned by `_get_first_available_slot` while 19.0.1.0.2 was
+installed may carry night or weekend dates and should be replanned once this
+version is live. On staging that is the 104 work orders replanned in the first
+batch of the not-started backfill.
+
+## 19.0.1.0.2 — superseded by 19.0.1.0.3
 
 Fixes work orders being scheduled across weeks or months instead of days.
 Diagnosed from production data on 2026-11-05 (MO/02316 and 79 others).
