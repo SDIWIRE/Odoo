@@ -58,6 +58,8 @@ GAMMA / SD ARTOS.
 | `views/mrp_workcenter_views.xml` | Adds the field to the Work Center form, after `oee_target`. Inherits `mrp.mrp_workcenter_view`. |
 | `tests/test_workcenter_concurrency.py` | 7 `TransactionCase` tests, tagged `post_install`. **See "Testing status" below — these have never been executed.** |
 | `tools/verify_sweepline.py` | Standalone harness (no Odoo runtime needed) that runs the real occupancy math against Odoo's real `Intervals` class. 13/13 passing. |
+| `tools/verify_slot_finder.py` | Drives the real `_get_first_available_slot` against a faithful Mon-Fri calendar, no Odoo runtime. Covers the regression where a past over-capacity block dragged a slot backwards into the weekend. 4/4 passing. |
+| `tools/check_core_drift.py` | Diffs the copied override against core's live source; exits non-zero on unexpected drift. **Run after every Odoo upgrade** — a stale copy has already caused one production bug. |
 
 ## How the scheduling override works
 
@@ -132,6 +134,39 @@ the ORM integration around it.
 
 **Recommended: push to a development branch first so Odoo.sh runs the suite**
 before this reaches production again.
+
+## Repairing existing smeared work orders
+
+Deploying `19.0.1.0.2` stops new work orders from being smeared, but does not
+retroactively fix ones already carrying bad dates. As measured on production
+2026-11-05: **80 of 652 open work orders** span more than 5 days, worst case 65
+days for 55 minutes of work. They need their dates recomputed.
+
+**Do not use Unplan / Plan for this.** `button_unplan` raises if any work order
+on the manufacturing order is done or started, and on production that is 101 of
+166 open MOs — only 4 of the 180 bad work orders are reachable that way.
+
+Use `mrp.workorder.action_replan()` instead. It is public, and it calls
+`mrp.production._plan_workorders(replan=True)` on the linked MO. Core's
+`_plan_workorder` starts with `if self.state not in ['blocked', 'ready']:
+return`, so done and in-progress work orders are never touched, and it reuses
+`self.duration_expected` for the same work center, so durations are preserved.
+Calling it on any one not-started work order replans every ready or blocked
+work order on that MO, so one call per MO is enough.
+
+Work in rough date order — each replan reads current occupancy, so a
+still-smeared neighbour will push the new one out. Note that replanning never
+schedules into the past (`max(production.date_start, datetime.now())`), so
+dates will move for orders that were not previously wrong; warn planning first.
+
+Do not run any of this before `19.0.1.0.4` is live, or it will just recreate the
+bad dates. See `DEPLOY.md` for the full procedure and the verification queries.
+
+Worth checking after repair: ASSEMBLY's duration for a single job can exceed the
+longest unbroken block in the calendar (08:00-12:00 and 13:00-17:00 give a
+240-minute maximum, and MO/02316's ASSEMBLY operation alone is 459.78 minutes).
+Core handles that by accumulating across intervals, so such a job legitimately
+spans more than one day — that is expected, and different from the smearing bug.
 
 ## Post-deploy configuration (SDI, via UI — no code)
 

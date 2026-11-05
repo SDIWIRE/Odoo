@@ -28,6 +28,39 @@ class MrpWorkcenter(models.Model):
         'Concurrent Operators must be at least 1.',
     )
 
+    def _workorder_leave_ids(self, leaves):
+        """Of `leaves`, the ids that represent a work order occupying one of this
+        work center's parallel lanes (as opposed to a hard block such as
+        maintenance downtime or a calendar-wide closure).
+
+        sudo: whether a leave belongs to a work order is a factual
+        classification, not user-scoped data. Without it, a work order the
+        current user can't read (record rules / another company) would be
+        misread as a hard block, silently making a capacity-N station behave
+        like capacity-1 for that window.
+        """
+        if not leaves:
+            return set()
+        return set(self.env['mrp.workorder'].sudo().search(
+            [('leave_id', 'in', leaves.ids)]).leave_id.ids)
+
+    def _get_lane_occupancy_leave_ids(self, date_from=None):
+        """Ids of every leave currently occupying a lane on this work center,
+        optionally limited to those still running at/after `date_from`.
+
+        Used to keep core code that assumes "one work order at a time per work
+        center" from treating a parallel operator's job as station downtime.
+        """
+        self.ensure_one()
+        domain = [
+            ('resource_id', '=', self.resource_id.id),
+            ('time_type', '=', 'other'),
+        ]
+        if date_from:
+            domain.append(('date_to', '>=', date_from))
+        leaves = self.env['resource.calendar.leaves'].search(domain)
+        return self._workorder_leave_ids(leaves)
+
     def _get_overcapacity_intervals(self, date_start, date_stop, leaves_to_ignore=False):
         """Sub-intervals of [date_start, date_stop] where the number of overlapping
         work-order leaves on this work center's calendar already meets or exceeds
@@ -63,13 +96,7 @@ class MrpWorkcenter(models.Model):
         # Any other time_type='other' leave - calendar-wide ones (no resource) or
         # ones created by another module (e.g. maintenance downtime) - keeps core's
         # semantics: a full block regardless of concurrency.
-        # sudo: whether a leave belongs to a work order is a factual
-        # classification, not user-scoped data. Without it, a work order the
-        # current user can't read (record rules / another company) would have its
-        # leave misread as a hard block, silently making a capacity-N station
-        # behave like capacity-1 for that window.
-        occupancy_leave_ids = set(self.env['mrp.workorder'].sudo().search(
-            [('leave_id', 'in', leaves.ids)]).leave_id.ids) if leaves else set()
+        occupancy_leave_ids = self._workorder_leave_ids(leaves)
 
         # Sweep-line: net concurrency change at each distinct timestamp, clipped to
         # the query window so partially-overlapping leaves still contribute correctly.
@@ -148,8 +175,16 @@ class MrpWorkcenter(models.Model):
                     start_interval = start_interval or start
                     interval_minutes = (stop - start).total_seconds() / 60
                     while (interval := Intervals([(start_interval or start, start + timedelta(minutes=min(remaining, interval_minutes)), _records)])) \
-                      and (conflict := interval & workorder_intervals or interval & extra_leaves_slots_intervals):
-                        (_start, start, _records) = conflict._items[0]  # restart available interval at conflicting interval stop
+                      and (conflict := workorder_intervals.conflicting(interval) or extra_leaves_slots_intervals.conflicting(interval)):
+                        # Deliberate divergence from core: also clamp forward with
+                        # max(..., start). `interval` begins at the accumulated
+                        # `start_interval`, which can be days earlier, so conflicting()
+                        # can return a block that ended before this interval began.
+                        # Core never moves backwards because its conflict set (every
+                        # leave) is dense; our over-capacity set is sparse, so without
+                        # this `start` jumps back into a past block and the slot is
+                        # returned there - which is how work landed on a Saturday night.
+                        start = min(max(max(conflict_stop for _start, conflict_stop, _records in conflict), start), stop)  # restart available interval at conflicting interval stop
                         interval_minutes = (stop - start).total_seconds() / 60
                         start_interval, remaining = start if interval_minutes else None, duration
                     if float_compare(interval_minutes, remaining, precision_digits=3) >= 0:
@@ -166,8 +201,10 @@ class MrpWorkcenter(models.Model):
                     stop_interval = stop_interval or stop
                     interval_minutes = (stop - start).total_seconds() / 60
                     while (interval := Intervals([(stop - timedelta(minutes=min(remaining, interval_minutes)), stop_interval or stop, _records)])) \
-                      and (conflict := interval & workorder_intervals or interval & extra_leaves_slots_intervals):
-                        (stop, _stop, _records) = conflict._items[0]  # restart available interval at conflicting interval start
+                      and (conflict := workorder_intervals.conflicting(interval) or extra_leaves_slots_intervals.conflicting(interval)):
+                        # Same clamp as the forward branch, mirrored: never move `stop`
+                        # later than it already is.
+                        stop = max(min(min(conflict_start for conflict_start, _stop, _records in conflict), stop), start)  # restart available interval at conflicting interval start
                         interval_minutes = (stop - start).total_seconds() / 60
                         stop_interval, remaining = stop if interval_minutes else None, duration
                     if float_compare(interval_minutes, remaining, precision_digits=3) >= 0:

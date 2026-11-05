@@ -1,6 +1,171 @@
 # Changelog
 
-## 19.0.1.0.1 — hotfix (not yet deployed)
+## 19.0.1.0.4 — hotfix (not yet deployed)
+
+### FIX (critical): a past over-capacity block pulled the slot backwards
+
+`models/mrp_workcenter.py` — `_get_first_available_slot`
+
+**Symptom.** After 19.0.1.0.3 fixed the stale-copy problem, BRAIDING still
+placed work on weekends, reproducibly: MO/02254's BRAID (1000 minutes) landed
+Sat 21 Nov 21:42 → Sun 22 Nov 14:22, the same answer on repeated runs, with the
+span exactly equal to the duration (no calendar gaps at all). Proven to be this
+module, not core: at `concurrent_capacity` 1 (which delegates to `super()`) the
+same work order was correctly placed Wed 16 Dec 09:16 → Fri 18 Dec 09:56.
+
+**Cause.** Found by reproducing it locally against BRAIDING's real 74 leaves
+with an instrumented calendar (`tools/verify_slot_finder.py`). The available
+intervals handed to the walk were correct — 21 intervals, none on a weekend —
+so the fault was in the walk itself.
+
+The candidate `interval` starts at the accumulated `start_interval`, which can
+be days earlier than the interval currently being examined. While processing
+Monday 08:00-12:00, `interval` still reached back to Wednesday, so
+`conflicting()` returned an over-capacity block from the *previous Saturday*
+(16:22-21:42). The walk then runs
+`start = min(max(conflict_stop ...), stop)`, which clamps the upper bound but
+not the lower one, so `start` was set backwards to Sat 21:42. From there
+`interval_minutes` measured Sat 21:42 → Mon 12:00 — about 2.3 days of apparent
+room — which comfortably exceeded the 1000 minutes needed, so the slot was
+returned starting Saturday night.
+
+Core carries the same unclamped expression but does not hit it, because its
+conflict set is every leave on the resource and is therefore dense: `max()`
+practically always lands at or after the current position. This module's
+over-capacity set is sparse by construction — it only covers times where N jobs
+already overlap — so `max()` can land in the past.
+
+**Fix.** Clamp in both directions, so the walk can never move backwards:
+
+    start = min(max(max(conflict_stop ...), start), stop)   # forward branch
+    stop  = max(min(min(conflict_start ...), stop), start)  # backward branch
+
+This is a deliberate divergence from core, commented as such in the source and
+registered in `tools/check_core_drift.py` as four exact forms (core's and ours,
+both directions) so any *other* change core makes to those lines is still
+reported. With the clamp the same work order is placed Mon 23 Nov 08:00 → Wed
+25 Nov 08:40: 2920 minutes of clock for 1000 minutes of work, with proper
+overnight gaps, and three weeks earlier than core manages at capacity 1.
+
+**Added:** `tools/verify_slot_finder.py` — drives the real
+`_get_first_available_slot` against a faithful Mon-Fri 08:00-12:00 / 13:00-17:00
+calendar with no Odoo runtime. Four cases, including this regression. 4/4.
+
+### Data impact
+
+Work orders planned while 19.0.1.0.2 or 19.0.1.0.3 was installed may carry
+night or weekend dates and should be replanned once this version is live. On
+staging that is the full not-started backfill (155 MOs / 805 work orders), of
+which 803 were already correct and 2 were this bug.
+
+## 19.0.1.0.3 — superseded by 19.0.1.0.4
+
+### FIX (critical): work scheduled on nights and weekends
+
+`models/mrp_workcenter.py` — `_get_first_available_slot`
+
+**Symptom.** Replanned work orders on multi-operator stations landed outside
+working hours: BRAIDING and TESTING jobs chained back-to-back through Sunday
+night (11:26 → 17:33 → 22:40 → 23:12 → 01:19), each one's elapsed span exactly
+equal to its duration with no calendar gaps. Proven to be this module and not
+core by A/B on one work order: at `concurrent_capacity` 3 it was placed Sun
+08 Nov 22:40; at `concurrent_capacity` 1 (which delegates to `super()`) core
+placed the same work order Tue 17 Nov 09:35.
+
+**Cause.** This method is a full copy of core's, and **core changed underneath
+it**. Current core detects conflicts with `workorder_intervals.conflicting(interval)`
+and advances with `start = min(max(conflict_stop ...), stop)`. The copy in this
+module was taken from an earlier revision that used `interval & workorder_intervals`
+and `start = conflict._items[0]`.
+
+The missing piece is the `min(..., stop)` clamp. `stop` is the end of the
+current *working-hours* interval. Without it, `start` is assigned a timestamp
+taken from a leave interval, and leaves routinely span nights and weekends, so
+`start` escaped the working day and the returned slot went with it. Core's
+clamp keeps `start` inside the available interval.
+
+**Fix.** Both the forward and backward branches now match core's current
+implementation exactly. A re-diff confirms the only remaining differences are
+the three intended ones: the `concurrent_capacity <= 1` guard, the substitution
+of `_get_overcapacity_intervals` for core's leave lookup, and the records
+payload on `extra_leaves_slots_intervals`.
+
+**Also added:** `tools/check_core_drift.py`, which diffs this override against
+core's current source and exits non-zero on unexpected drift. This class of bug
+has now occurred once; run the tool after every Odoo upgrade. It is what found
+this one.
+
+### Data impact
+
+Any work order planned by `_get_first_available_slot` while 19.0.1.0.2 was
+installed may carry night or weekend dates and should be replanned once this
+version is live. On staging that is the 104 work orders replanned in the first
+batch of the not-started backfill.
+
+## 19.0.1.0.2 — superseded by 19.0.1.0.3
+
+Fixes work orders being scheduled across weeks or months instead of days.
+Diagnosed from production data on 2026-11-05 (MO/02316 and 79 others).
+
+### FIX (critical): started work orders smeared across weeks
+
+`models/mrp_workorder.py` — new override of `_calculate_date_finished`
+
+**Symptom.** Work orders occupying absurd windows on Work Center Planning.
+Measured on production: 80 of 652 open work orders spanned more than 5 days.
+Worst case `WH/MO/02290` ASSEMBLY — **54.67 minutes of work holding a 65-day
+window**. Every one of the ten worst cases was in state `progress`, i.e. had
+been started. Work centers left at 1 operator were essentially unaffected,
+which is what localised the cause.
+
+**Cause.** Core's `_calculate_date_finished` answers "start at T, finish when?"
+by walking the work center calendar and skipping unavailable time, with
+`domain = [('time_type', 'in', ['leave', 'other'])]` and
+`resource=workcenter.resource_id`. Every *other* work order's calendar block is
+`time_type='other'` on that resource, so core treats a colleague's job as
+station downtime. That is right for a single-lane machine and wrong for a
+multi-operator bench — and this module deliberately creates up to N overlapping
+blocks per work center, which core never expected.
+
+It then compounds. `button_start` calls `_calculate_date_finished`, so each
+started job skips over every concurrent job's window, lands far in the future,
+and writes its own leave that wide. The next job skips over *that*, and so on.
+Once N such windows overlap, `_get_first_available_slot` also sees the station
+as full and pushes new work out too. A runaway feedback loop, which is why the
+spans cluster around 50-65 days rather than being merely somewhat long.
+
+**Fix.** For work centers with concurrent operators, exclude work-order
+occupancy leaves from the unavailable-time domain. Genuine closures
+(`time_type='leave'`) and hard blocks such as maintenance downtime still count.
+Whether a free lane exists at all is a scheduling question and stays with
+`_get_first_available_slot` — deciding it inside a duration calculation is what
+caused the smearing. Work centers at the default of 1 operator fall through to
+`super()` and keep core behavior exactly.
+
+`_calculate_duration_expected` was checked and is **not** affected: it calls
+`get_work_duration_data` without a `resource`, so it only ever sees
+company-wide leaves.
+
+**Tests added.** `test_date_finished_ignores_parallel_operators` (a 10-day
+parallel block must not move a 1-hour job's finish date) and
+`test_date_finished_single_lane_unchanged` (at capacity 1 the work order must
+still queue behind a blocking job).
+
+### Refactor
+
+`_workorder_leave_ids` / `_get_lane_occupancy_leave_ids` factored onto
+`mrp.workcenter` so the "is this leave an occupied lane or a hard block"
+classification has one definition shared by the scheduler and the date
+calculation. `tools/verify_sweepline.py` now exercises the real helper;
+still 13/13.
+
+### Data repair required after deploying
+
+The fix corrects new calculations; it does not retroactively fix the 80 work
+orders already carrying bad dates. Those need re-planning — see README
+"Repairing existing smeared work orders".
+
+## 19.0.1.0.1 — hotfix (superseded by 19.0.1.0.2, not deployed separately)
 
 Fixes the production errors reported 2026-08-14 and 2026-08-15. Two source files
 changed; no data migration, no reinstall needed, existing "Concurrent Operators"

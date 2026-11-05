@@ -94,6 +94,9 @@ def load_method_under_test():
     spec = importlib.util.spec_from_file_location("mod_under_test", MODULE)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
+    # Borrow the real helper too, so the lane-vs-hard-block classification under
+    # test is the shipped one rather than a stand-in.
+    FakeWorkcenter._workorder_leave_ids = mod.MrpWorkcenter._workorder_leave_ids
     return mod.MrpWorkcenter._get_overcapacity_intervals
 
 
