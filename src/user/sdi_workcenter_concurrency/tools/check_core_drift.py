@@ -45,6 +45,15 @@ EXPECTED = (
     # _get_overcapacity_intervals instead
     'if leaves_to_ignore:',
     'extra_leaves_slots_intervals = Intervals(',
+    # Intentional divergence: we additionally clamp forward (max(..., start)) and
+    # backward (min(..., stop)) so a sparse over-capacity conflict that ended
+    # before the current interval cannot drag the slot backwards. Listed as four
+    # exact forms - core's and ours, both directions - so any OTHER change core
+    # makes to these lines is still reported.
+    'start = min(max(conflict_stop',            # core, forward
+    'start = min(max(max(conflict_stop',        # ours, forward
+    'stop = max(min(conflict_start',            # core, backward
+    'stop = max(min(min(conflict_start',        # ours, backward
     # core's docstring, which we replace with our own
     'The available interval is disjoinct',
     'can overlap the time-off',

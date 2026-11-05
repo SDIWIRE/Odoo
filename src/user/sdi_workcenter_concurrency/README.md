@@ -58,6 +58,8 @@ GAMMA / SD ARTOS.
 | `views/mrp_workcenter_views.xml` | Adds the field to the Work Center form, after `oee_target`. Inherits `mrp.mrp_workcenter_view`. |
 | `tests/test_workcenter_concurrency.py` | 7 `TransactionCase` tests, tagged `post_install`. **See "Testing status" below — these have never been executed.** |
 | `tools/verify_sweepline.py` | Standalone harness (no Odoo runtime needed) that runs the real occupancy math against Odoo's real `Intervals` class. 13/13 passing. |
+| `tools/verify_slot_finder.py` | Drives the real `_get_first_available_slot` against a faithful Mon-Fri calendar, no Odoo runtime. Covers the regression where a past over-capacity block dragged a slot backwards into the weekend. 4/4 passing. |
+| `tools/check_core_drift.py` | Diffs the copied override against core's live source; exits non-zero on unexpected drift. **Run after every Odoo upgrade** — a stale copy has already caused one production bug. |
 
 ## How the scheduling override works
 

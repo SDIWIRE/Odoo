@@ -176,7 +176,15 @@ class MrpWorkcenter(models.Model):
                     interval_minutes = (stop - start).total_seconds() / 60
                     while (interval := Intervals([(start_interval or start, start + timedelta(minutes=min(remaining, interval_minutes)), _records)])) \
                       and (conflict := workorder_intervals.conflicting(interval) or extra_leaves_slots_intervals.conflicting(interval)):
-                        start = min(max(conflict_stop for _start, conflict_stop, _records in conflict), stop)  # restart available interval at conflicting interval stop
+                        # Deliberate divergence from core: also clamp forward with
+                        # max(..., start). `interval` begins at the accumulated
+                        # `start_interval`, which can be days earlier, so conflicting()
+                        # can return a block that ended before this interval began.
+                        # Core never moves backwards because its conflict set (every
+                        # leave) is dense; our over-capacity set is sparse, so without
+                        # this `start` jumps back into a past block and the slot is
+                        # returned there - which is how work landed on a Saturday night.
+                        start = min(max(max(conflict_stop for _start, conflict_stop, _records in conflict), start), stop)  # restart available interval at conflicting interval stop
                         interval_minutes = (stop - start).total_seconds() / 60
                         start_interval, remaining = start if interval_minutes else None, duration
                     if float_compare(interval_minutes, remaining, precision_digits=3) >= 0:
@@ -194,7 +202,9 @@ class MrpWorkcenter(models.Model):
                     interval_minutes = (stop - start).total_seconds() / 60
                     while (interval := Intervals([(stop - timedelta(minutes=min(remaining, interval_minutes)), stop_interval or stop, _records)])) \
                       and (conflict := workorder_intervals.conflicting(interval) or extra_leaves_slots_intervals.conflicting(interval)):
-                        stop = max(min(conflict_start for conflict_start, _stop, _records in conflict), start)  # restart available interval at conflicting interval start
+                        # Same clamp as the forward branch, mirrored: never move `stop`
+                        # later than it already is.
+                        stop = max(min(min(conflict_start for conflict_start, _stop, _records in conflict), stop), start)  # restart available interval at conflicting interval start
                         interval_minutes = (stop - start).total_seconds() / 60
                         stop_interval, remaining = stop if interval_minutes else None, duration
                     if float_compare(interval_minutes, remaining, precision_digits=3) >= 0:

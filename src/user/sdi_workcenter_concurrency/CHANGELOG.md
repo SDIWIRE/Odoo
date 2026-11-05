@@ -1,6 +1,64 @@
 # Changelog
 
-## 19.0.1.0.3 — hotfix (not yet deployed)
+## 19.0.1.0.4 — hotfix (not yet deployed)
+
+### FIX (critical): a past over-capacity block pulled the slot backwards
+
+`models/mrp_workcenter.py` — `_get_first_available_slot`
+
+**Symptom.** After 19.0.1.0.3 fixed the stale-copy problem, BRAIDING still
+placed work on weekends, reproducibly: MO/02254's BRAID (1000 minutes) landed
+Sat 21 Nov 21:42 → Sun 22 Nov 14:22, the same answer on repeated runs, with the
+span exactly equal to the duration (no calendar gaps at all). Proven to be this
+module, not core: at `concurrent_capacity` 1 (which delegates to `super()`) the
+same work order was correctly placed Wed 16 Dec 09:16 → Fri 18 Dec 09:56.
+
+**Cause.** Found by reproducing it locally against BRAIDING's real 74 leaves
+with an instrumented calendar (`tools/verify_slot_finder.py`). The available
+intervals handed to the walk were correct — 21 intervals, none on a weekend —
+so the fault was in the walk itself.
+
+The candidate `interval` starts at the accumulated `start_interval`, which can
+be days earlier than the interval currently being examined. While processing
+Monday 08:00-12:00, `interval` still reached back to Wednesday, so
+`conflicting()` returned an over-capacity block from the *previous Saturday*
+(16:22-21:42). The walk then runs
+`start = min(max(conflict_stop ...), stop)`, which clamps the upper bound but
+not the lower one, so `start` was set backwards to Sat 21:42. From there
+`interval_minutes` measured Sat 21:42 → Mon 12:00 — about 2.3 days of apparent
+room — which comfortably exceeded the 1000 minutes needed, so the slot was
+returned starting Saturday night.
+
+Core carries the same unclamped expression but does not hit it, because its
+conflict set is every leave on the resource and is therefore dense: `max()`
+practically always lands at or after the current position. This module's
+over-capacity set is sparse by construction — it only covers times where N jobs
+already overlap — so `max()` can land in the past.
+
+**Fix.** Clamp in both directions, so the walk can never move backwards:
+
+    start = min(max(max(conflict_stop ...), start), stop)   # forward branch
+    stop  = max(min(min(conflict_start ...), stop), start)  # backward branch
+
+This is a deliberate divergence from core, commented as such in the source and
+registered in `tools/check_core_drift.py` as four exact forms (core's and ours,
+both directions) so any *other* change core makes to those lines is still
+reported. With the clamp the same work order is placed Mon 23 Nov 08:00 → Wed
+25 Nov 08:40: 2920 minutes of clock for 1000 minutes of work, with proper
+overnight gaps, and three weeks earlier than core manages at capacity 1.
+
+**Added:** `tools/verify_slot_finder.py` — drives the real
+`_get_first_available_slot` against a faithful Mon-Fri 08:00-12:00 / 13:00-17:00
+calendar with no Odoo runtime. Four cases, including this regression. 4/4.
+
+### Data impact
+
+Work orders planned while 19.0.1.0.2 or 19.0.1.0.3 was installed may carry
+night or weekend dates and should be replanned once this version is live. On
+staging that is the full not-started backfill (155 MOs / 805 work orders), of
+which 803 were already correct and 2 were this bug.
+
+## 19.0.1.0.3 — superseded by 19.0.1.0.4
 
 ### FIX (critical): work scheduled on nights and weekends
 
