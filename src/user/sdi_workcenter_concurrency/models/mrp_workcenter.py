@@ -28,6 +28,39 @@ class MrpWorkcenter(models.Model):
         'Concurrent Operators must be at least 1.',
     )
 
+    def _workorder_leave_ids(self, leaves):
+        """Of `leaves`, the ids that represent a work order occupying one of this
+        work center's parallel lanes (as opposed to a hard block such as
+        maintenance downtime or a calendar-wide closure).
+
+        sudo: whether a leave belongs to a work order is a factual
+        classification, not user-scoped data. Without it, a work order the
+        current user can't read (record rules / another company) would be
+        misread as a hard block, silently making a capacity-N station behave
+        like capacity-1 for that window.
+        """
+        if not leaves:
+            return set()
+        return set(self.env['mrp.workorder'].sudo().search(
+            [('leave_id', 'in', leaves.ids)]).leave_id.ids)
+
+    def _get_lane_occupancy_leave_ids(self, date_from=None):
+        """Ids of every leave currently occupying a lane on this work center,
+        optionally limited to those still running at/after `date_from`.
+
+        Used to keep core code that assumes "one work order at a time per work
+        center" from treating a parallel operator's job as station downtime.
+        """
+        self.ensure_one()
+        domain = [
+            ('resource_id', '=', self.resource_id.id),
+            ('time_type', '=', 'other'),
+        ]
+        if date_from:
+            domain.append(('date_to', '>=', date_from))
+        leaves = self.env['resource.calendar.leaves'].search(domain)
+        return self._workorder_leave_ids(leaves)
+
     def _get_overcapacity_intervals(self, date_start, date_stop, leaves_to_ignore=False):
         """Sub-intervals of [date_start, date_stop] where the number of overlapping
         work-order leaves on this work center's calendar already meets or exceeds
@@ -63,13 +96,7 @@ class MrpWorkcenter(models.Model):
         # Any other time_type='other' leave - calendar-wide ones (no resource) or
         # ones created by another module (e.g. maintenance downtime) - keeps core's
         # semantics: a full block regardless of concurrency.
-        # sudo: whether a leave belongs to a work order is a factual
-        # classification, not user-scoped data. Without it, a work order the
-        # current user can't read (record rules / another company) would have its
-        # leave misread as a hard block, silently making a capacity-N station
-        # behave like capacity-1 for that window.
-        occupancy_leave_ids = set(self.env['mrp.workorder'].sudo().search(
-            [('leave_id', 'in', leaves.ids)]).leave_id.ids) if leaves else set()
+        occupancy_leave_ids = self._workorder_leave_ids(leaves)
 
         # Sweep-line: net concurrency change at each distinct timestamp, clipped to
         # the query window so partially-overlapping leaves still contribute correctly.

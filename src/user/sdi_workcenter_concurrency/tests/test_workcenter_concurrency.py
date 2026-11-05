@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from odoo import Command
 from odoo.tests import Form, TransactionCase, tagged
@@ -137,6 +137,55 @@ class TestWorkcenterConcurrency(TransactionCase):
         all_workorders = sum((mo.workorder_ids for mo in mos[1:]), mos[0].workorder_ids)
         conflicts = all_workorders._get_conflicted_workorder_ids()
         self.assertEqual(conflicts, {}, "exactly-at-capacity overlap should never be flagged")
+
+    def test_date_finished_ignores_parallel_operators(self):
+        """Regression for the production date-smearing.
+
+        Core computes "start at T, finish when?" by walking the calendar and
+        skipping every other work order's leave as unavailable. On a station
+        with parallel operators that is wrong - a colleague at the next bench
+        does not stop this operator working - and it compounds: each started
+        job skipped over the others' windows, landed far in the future, which
+        widened its own leave for the next job to skip. In production a
+        ~1 hour job ended up holding a 65-day window at an 8-operator station.
+        """
+        mo = self._make_mo(self.bom, 6)  # 6 units x 10 min = 60 min of work
+        mo.button_plan()
+        wo = mo.workorder_ids
+        self.assertAlmostEqual(wo.duration_expected, 60.0, places=2)
+
+        # A parallel operator occupies one of the other lanes for 10 days.
+        blocker_mo = self._make_mo(self.bom, 1)
+        blocker_mo.button_plan()
+        blocker_mo.workorder_ids.leave_id.write({
+            'date_from': self.start,
+            'date_to': self.start + timedelta(days=10),
+        })
+
+        # 24/7 calendar, capacity 5 -> an hour of work still takes an hour.
+        finished = wo._calculate_date_finished(date_start=self.start)
+        self.assertEqual(
+            finished, self.start + timedelta(minutes=60),
+            "a parallel operator's job must not push this work order's finish date out")
+
+    def test_date_finished_single_lane_unchanged(self):
+        """At the default of 1 operator, core's behavior must be untouched:
+        another job on the station genuinely does block it."""
+        mo = self._make_mo(self.single_lane_bom, 6)
+        mo.button_plan()
+        wo = mo.workorder_ids
+
+        blocker_mo = self._make_mo(self.single_lane_bom, 1)
+        blocker_mo.button_plan()
+        blocker_mo.workorder_ids.leave_id.write({
+            'date_from': self.start,
+            'date_to': self.start + timedelta(days=2),
+        })
+
+        finished = wo._calculate_date_finished(date_start=self.start)
+        self.assertGreaterEqual(
+            finished, self.start + timedelta(days=2),
+            "a single-lane work center must still queue behind the blocking job")
 
     def test_conflicted_workorder_ids_with_virtual_onchange_records(self):
         """Regression for the production KeyError that blocked adding a work

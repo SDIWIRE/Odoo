@@ -1,6 +1,69 @@
 # Changelog
 
-## 19.0.1.0.1 — hotfix (not yet deployed)
+## 19.0.1.0.2 — hotfix (not yet deployed)
+
+Fixes work orders being scheduled across weeks or months instead of days.
+Diagnosed from production data on 2026-11-05 (MO/02316 and 79 others).
+
+### FIX (critical): started work orders smeared across weeks
+
+`models/mrp_workorder.py` — new override of `_calculate_date_finished`
+
+**Symptom.** Work orders occupying absurd windows on Work Center Planning.
+Measured on production: 80 of 652 open work orders spanned more than 5 days.
+Worst case `WH/MO/02290` ASSEMBLY — **54.67 minutes of work holding a 65-day
+window**. Every one of the ten worst cases was in state `progress`, i.e. had
+been started. Work centers left at 1 operator were essentially unaffected,
+which is what localised the cause.
+
+**Cause.** Core's `_calculate_date_finished` answers "start at T, finish when?"
+by walking the work center calendar and skipping unavailable time, with
+`domain = [('time_type', 'in', ['leave', 'other'])]` and
+`resource=workcenter.resource_id`. Every *other* work order's calendar block is
+`time_type='other'` on that resource, so core treats a colleague's job as
+station downtime. That is right for a single-lane machine and wrong for a
+multi-operator bench — and this module deliberately creates up to N overlapping
+blocks per work center, which core never expected.
+
+It then compounds. `button_start` calls `_calculate_date_finished`, so each
+started job skips over every concurrent job's window, lands far in the future,
+and writes its own leave that wide. The next job skips over *that*, and so on.
+Once N such windows overlap, `_get_first_available_slot` also sees the station
+as full and pushes new work out too. A runaway feedback loop, which is why the
+spans cluster around 50-65 days rather than being merely somewhat long.
+
+**Fix.** For work centers with concurrent operators, exclude work-order
+occupancy leaves from the unavailable-time domain. Genuine closures
+(`time_type='leave'`) and hard blocks such as maintenance downtime still count.
+Whether a free lane exists at all is a scheduling question and stays with
+`_get_first_available_slot` — deciding it inside a duration calculation is what
+caused the smearing. Work centers at the default of 1 operator fall through to
+`super()` and keep core behavior exactly.
+
+`_calculate_duration_expected` was checked and is **not** affected: it calls
+`get_work_duration_data` without a `resource`, so it only ever sees
+company-wide leaves.
+
+**Tests added.** `test_date_finished_ignores_parallel_operators` (a 10-day
+parallel block must not move a 1-hour job's finish date) and
+`test_date_finished_single_lane_unchanged` (at capacity 1 the work order must
+still queue behind a blocking job).
+
+### Refactor
+
+`_workorder_leave_ids` / `_get_lane_occupancy_leave_ids` factored onto
+`mrp.workcenter` so the "is this leave an occupied lane or a hard block"
+classification has one definition shared by the scheduler and the date
+calculation. `tools/verify_sweepline.py` now exercises the real helper;
+still 13/13.
+
+### Data repair required after deploying
+
+The fix corrects new calculations; it does not retroactively fix the 80 work
+orders already carrying bad dates. Those need re-planning — see README
+"Repairing existing smeared work orders".
+
+## 19.0.1.0.1 — hotfix (superseded by 19.0.1.0.2, not deployed separately)
 
 Fixes the production errors reported 2026-08-14 and 2026-08-15. Two source files
 changed; no data migration, no reinstall needed, existing "Concurrent Operators"

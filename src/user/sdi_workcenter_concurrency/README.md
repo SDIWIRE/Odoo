@@ -133,6 +133,31 @@ the ORM integration around it.
 **Recommended: push to a development branch first so Odoo.sh runs the suite**
 before this reaches production again.
 
+## Repairing existing smeared work orders
+
+Deploying `19.0.1.0.2` stops new work orders from being smeared, but does not
+retroactively fix ones already carrying bad dates. As measured on production
+2026-11-05: **80 of 652 open work orders** span more than 5 days, worst case 65
+days for 55 minutes of work. They need their dates recomputed.
+
+For work orders not yet started (`blocked` / `ready`), re-planning the
+manufacturing order regenerates them: **Unplan**, then **Plan**. Doing this in
+rough date order is better than at random, because each re-plan reads the
+current occupancy and a still-smeared neighbour will push the new one out.
+
+For work orders already in progress, re-planning won't touch them — writing
+`date_finished` is what updates the underlying calendar block. Recomputing those
+is a short scripted pass (`_calculate_date_finished` per work order, then write)
+and should be done on staging first, verified, and only then run on production.
+Do not run it before `19.0.1.0.2` is live, or it will just recreate the bad
+dates.
+
+Worth checking after repair: ASSEMBLY's duration for a single job can exceed the
+longest unbroken block in the calendar (08:00-12:00 and 13:00-17:00 give a
+240-minute maximum, and MO/02316's ASSEMBLY operation alone is 459.78 minutes).
+Core handles that by accumulating across intervals, so such a job legitimately
+spans more than one day — that is expected, and different from the smearing bug.
+
 ## Post-deploy configuration (SDI, via UI — no code)
 
 `Manufacturing → Configuration → Work Centers` → open a station → General
