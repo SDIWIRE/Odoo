@@ -1,4 +1,4 @@
-# prod_mrp_partial_transfer 19.0.2.1.1
+# prod_mrp_partial_transfer 19.0.2.2.0
 
 Replaces 19.0.1.0.0 (the Sept 24, 2026 build installed in production). Implements
 option A of the Nov 5, 2026 fix brief: every partial transfer is posted on the MO
@@ -6,6 +6,46 @@ itself, the way Odoo's own production posting works.
 
 The folder name must stay `prod_mrp_partial_transfer` so Odoo upgrades the
 installed module instead of installing a second one.
+
+## Staging test results (staging-41414302, Nov 6, on 19.0.2.1.1)
+
+Test products PT-TEST FG MTS / MTO / SHORT / WO, components at $2.00 and $0.50.
+
+| # | Case | Result |
+| --- | --- | --- |
+| 1 | Transfer 40 of 100 (make to stock) | Pass: produced 40, 60 expected, components for 40, value $180 = components, storage validated for 40, nothing left in Post-Production |
+| 2 | Transfer 40 with WH/Stock at -40 | Pass: WH/Stock back to 0, bin unchanged |
+| 3 | Make to order: transfer 40, ship 40, transfer 60 | Pass: Done 100/100, one receipt per unit (40 + 60, both on the MO), value $450 = components, 60 reserved for the Pick backorder |
+| 4 | Transfer 99, close with backorder | Pass: -001 Done at 99; -002 for 1. Odoo splits -002's finished move 0.99 + 0.01; a standard close posts exactly 1. 19.0.2.2.0 also lets the app transfer on such backorders |
+| 5 | Transfer 99, close without backorder | Pass: Done at 99, nothing left incoming |
+| 6 | Component short | Pass: partial and final both refused with the missing component named; MO untouched. Override posts and the component goes negative |
+| 7 | Work orders open | Flow passes; costing bug found: labour counted on every post ($44.47 twice). Fixed in 19.0.2.2.0 |
+| 8 | Cancel after a partial transfer | Pass: Odoo closes the MO as Done at 30; rest cancelled; no receipt on a cancelled MO |
+| 9 | Valuation | Pass without work orders (finished value = component value on every post); with work orders fixed in 19.0.2.2.0 |
+| 10 | Standard Mark as Done without the app | Pass: unchanged behaviour, storage left manual as before |
+
+## Changed in 19.0.2.2.0
+
+* Labour and overhead from work orders are costed once per MO. Odoo 19 adds the cost of
+  all work-order time (work-centre rate and employee cost) every time it posts finished
+  goods; with several posts on one MO that counted the same time again on each post.
+  Each post on an app MO now adds only what earlier posts did not cost
+  (`pt_overhead_posted`). Components are still valued exactly as Odoo values them.
+* Transfers are allowed when an MO has more than one open finished move (Odoo spreads the
+  quantity across them; this happens on backorders created by a short close).
+* Remaining to Produce shows 0 once an MO is closed.
+
+Known Odoo behaviour (not changed): if a work order has no time clocked when the first
+quantity is posted, Odoo fills in the expected time for the quantity posted so far. Time
+clocked later is costed on the next post. Clock time on work orders for accurate labour.
+
+## Changed in 19.0.2.1.2
+
+* Converting an open MO now puts away (instead of cancelling) the old storage transfers for
+  units still sitting in Post-Production, filling a negative WH/Stock first, before the old
+  receipts are returned. On staging, cancelling left GL 62363-197 with 8 units in
+  Post-Production reserved again by MO 02178's customer pick while WH/Stock stayed at -8.
+  Duplicate conversion (Done MOs) still cancels them, since those units are the extra ones.
 
 ## Fixed in 19.0.2.1.1 (found on staging-41414302, Nov 6)
 
@@ -90,7 +130,7 @@ component moves (Nov 6). Remaining release steps:
 
 1. Staging (copy of production): replace the module folder in the staging branch with
    this one, deploy, then Apps > MRP Partial Transfer to Stock > Upgrade. Version must
-   read 19.0.2.1.1. If the view `mrp.production.form.partial.transfer` was archived to
+   read 19.0.2.2.0. If the view `mrp.production.form.partial.transfer` was archived to
    hide the old button, unarchive it.
 2. Run the conversion (MOs with Old Partial Transfers > select all > Convert). Then the
    list must be empty, Done MOs with Open Moves empty, no open SFP left from WH/QC receipts.

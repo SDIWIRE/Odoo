@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 {
     'name': 'MRP Partial Transfer to Stock',
-    'version': '19.0.2.1.1',
+    'version': '19.0.2.2.0',
     'category': 'Manufacturing',
     'summary': 'Post partial production on the MO itself and put it away in one step',
     'description': """

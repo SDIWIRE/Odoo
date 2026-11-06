@@ -193,8 +193,11 @@ class MrpProduction(models.Model):
         # 1. Undo any reduction of the expected quantity (cleanup step 7).
         finished.product_uom_qty = self.product_uom_id._compute_quantity(
             self.product_qty - self.qty_produced, finished.product_uom)
-        # 2. Old storage transfers are no longer needed: the receipts are returned.
-        cancelled = self._pt_cancel_legacy_storage(legacy)
+        # 2. Put away what the old receipts left in Post-Production (filling a
+        #    negative WH/Stock first, as cleanup step 1 did) before returning them,
+        #    so those physical units end up in stock rather than reserved again
+        #    by the customer pick chained to the MO.
+        cancelled = self._pt_store_legacy_storage(legacy)
         # 3. Return the old receipts first, so the customer pick chained to the
         #    MO does not reserve the units posted in step 4.
         returned = self._pt_return_legacy(legacy, qty)
@@ -205,7 +208,7 @@ class MrpProduction(models.Model):
         # The finished quantity is filled in by Odoo (qty_producing - qty_produced).
         if float_compare(qty, remaining, precision_rounding=rounding) < 0:
             done_before = self.move_finished_ids.filtered(lambda m: m.state == 'done')
-            self._post_inventory(cancel_backorder=False)
+            self.with_context(pt_posting=True)._post_inventory(cancel_backorder=False)
             self.env.invalidate_all()
             new_done = self.move_finished_ids.filtered(
                 lambda m: m.state == 'done' and m.product_id == self.product_id) - done_before
@@ -214,13 +217,13 @@ class MrpProduction(models.Model):
                 raise UserError(_('Odoo posted %(p)s instead of %(q)s.', p=posted, q=qty))
         else:
             self.pt_used = True
-            self.with_context(skip_consumption=True).button_mark_done()
+            self.with_context(skip_consumption=True, pt_posting=True).button_mark_done()
             if self.state != 'done':
                 raise UserError(_('The MO could not be closed; close it with Mark as Done.'))
         self.pt_used = True
         self._pt_log(_('Old partial transfers converted'), _(
             '%(qty)s %(uom)s received by the old app were returned (%(ret)s) and posted on '
-            'this MO with their components. Old storage transfers cancelled: %(sfp)s.',
+            'this MO with their components. Old storage transfers put away or cancelled: %(sfp)s.',
             qty=qty, uom=self.product_uom_id.name, ret=returned.name,
             sfp=', '.join(cancelled) or _('none')))
 
@@ -245,6 +248,29 @@ class MrpProduction(models.Model):
             sfp=', '.join(cancelled) or _('none')))
 
     # ------------------------------------------------------------------
+    def _pt_store_legacy_storage(self, legacy):
+        """Validate the old storage transfers for what they have reserved (with
+        the negative fill), cancel the unreserved rest."""
+        dest = legacy.move_dest_ids.filtered(lambda m: m.state not in ('done', 'cancel'))
+        names = []
+        for picking in dest.picking_id:
+            ours = picking.move_ids & dest
+            to_store = ours.filtered(lambda m: float_compare(
+                m.quantity, 0.0, precision_rounding=m.product_uom.rounding) > 0)
+            (ours - to_store)._action_cancel()
+            if to_store:
+                for move in to_store:
+                    self._pt_fill_negative_first(move)
+                    move.picked = True
+                picking.with_context(skip_backorder=True, skip_sms=True,
+                                     picking_ids_not_to_backorder=picking.ids).button_validate()
+                if to_store.filtered(lambda m: m.state != 'done'):
+                    raise UserError(_('Old storage transfer %s could not be validated.', picking.name))
+                names.append(picking.name + _(' (put away)'))
+            else:
+                names.append(picking.name + _(' (cancelled)'))
+        return names
+
     def _pt_cancel_legacy_storage(self, legacy):
         dest = legacy.move_dest_ids.filtered(lambda m: m.state not in ('done', 'cancel'))
         names = []

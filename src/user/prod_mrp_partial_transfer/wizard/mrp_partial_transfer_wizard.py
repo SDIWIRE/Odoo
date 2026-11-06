@@ -81,7 +81,7 @@ class MrpPartialTransferWizard(models.TransientModel):
         rounding = mo.product_uom_id.rounding
         done_before = mo.move_finished_ids.filtered(lambda m: m.state == 'done')
         self._prepare(mo, qty, mo.qty_produced + qty)
-        mo._post_inventory(cancel_backorder=False)
+        mo.with_context(pt_posting=True)._post_inventory(cancel_backorder=False)
         self.env.invalidate_all()
         new_done = mo.move_finished_ids.filtered(
             lambda m: m.state == 'done' and m.product_id == mo.product_id) - done_before
@@ -106,7 +106,9 @@ class MrpPartialTransferWizard(models.TransientModel):
     def _post_final(self, mo, qty):
         self._prepare(mo, qty, mo.product_qty)
         mo.pt_used = True  # makes the button_mark_done hook put the goods away
-        ctx = {'skip_consumption': True} if self.accept_consumption_differences else {}
+        ctx = {'pt_posting': True}
+        if self.accept_consumption_differences:
+            ctx['skip_consumption'] = True
         res = mo.with_context(**ctx).button_mark_done()
         if mo.state != 'done':
             raise UserError(self._explain_blocked_close(mo, res))

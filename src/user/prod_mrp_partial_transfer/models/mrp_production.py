@@ -46,13 +46,18 @@ class MrpProduction(models.Model):
     qty_progress_pct = fields.Float(string='% Complete', compute='_compute_pt_progress')
     show_partial_transfer_button = fields.Boolean(compute='_compute_pt_progress')
     show_pt_close_button = fields.Boolean(compute='_compute_pt_progress')
+    pt_overhead_posted = fields.Float(
+        string='Labour and Overhead Already Costed', copy=False, readonly=True,
+        help="Work-order labour and overhead already included in finished goods posted "
+             "on this MO. Odoo 19 adds the cost of all time on the work orders every "
+             "time it posts, so each post here only adds what is not costed yet.")
 
     @api.depends('qty_produced', 'product_qty', 'state', 'pt_used')
     def _compute_pt_progress(self):
         for mo in self:
             rounding = mo.product_uom_id.rounding or 0.0001
             produced = mo.qty_produced
-            remaining = max(mo.product_qty - produced, 0.0)
+            remaining = 0.0 if mo.state in ('done', 'cancel') else max(mo.product_qty - produced, 0.0)
             has_remaining = float_compare(remaining, 0.0, precision_rounding=rounding) > 0
             is_open = mo.state in ('confirmed', 'progress', 'to_close')
             mo.qty_transferred_to_stock = produced
@@ -146,11 +151,10 @@ class MrpProduction(models.Model):
                 '(a separate WH/QC receipt not linked to the MO). A Manufacturing '
                 'administrator must click "Convert Old Partial Transfers" on it first.',
                 mo=self.name, qty=legacy_qty, uom=self.product_uom_id.name))
-        if len(self._pt_open_finished_move()) != 1:
+        if not self._pt_open_finished_move():
             raise UserError(_(
-                '%s does not have exactly one open finished-product move, so the '
-                'app cannot tell what to post. Check the MO before continuing.',
-                self.name))
+                '%s has no open finished-product move left to post on. Check the MO '
+                'before continuing.', self.name))
 
     def _pt_component_shortages(self):
         """Components that would go negative in their source location if the
@@ -174,6 +178,37 @@ class MrpProduction(models.Model):
                     uom=product.uom_id.name, avail=round(available, 4),
                     loc=move.location_id.display_name))
         return shortages
+
+    # ------------------------------------------------------------------
+    # Costing: count work-order labour and overhead once per MO
+    # ------------------------------------------------------------------
+    def _cal_price(self, consumed_moves):
+        """Odoo 19 (mrp_account and the employee-cost modules) adds the cost of
+        all time on the MO's work orders every time finished goods are posted.
+        With several posts on one MO that counts the same time again on each
+        post (verified on staging, Nov 6 2026). For MOs using partial transfers,
+        keep components exactly as Odoo values them and add only the labour and
+        overhead not costed by an earlier post."""
+        res = super()._cal_price(consumed_moves)
+        if len(self) != 1 or not (self.env.context.get('pt_posting') or self.pt_used):
+            return res
+        finished = self.move_finished_ids.filtered(
+            lambda m: m.product_id == self.product_id and m.state not in ('done', 'cancel')
+            and m.product_uom.compare(m.quantity, 0) > 0)
+        byproducts = self.move_byproduct_ids.filtered(
+            lambda m: m.state not in ('done', 'cancel') and m.product_uom.compare(m.quantity, 0) > 0)
+        if not finished or byproducts or self.product_id.cost_method not in ('fifo', 'average'):
+            return res
+        uom = self.product_id.uom_id
+        qty = sum(m.product_uom._compute_quantity(m.quantity, uom) for m in finished)
+        if not qty:
+            return res
+        component_cost = sum(m.value for m in consumed_moves) + self.extra_cost * qty
+        overhead_now = finished[:1].price_unit * qty - component_cost
+        new_overhead = max(overhead_now - self.pt_overhead_posted, 0.0)
+        finished.price_unit = (component_cost + new_overhead) / qty
+        self.pt_overhead_posted += new_overhead
+        return res
 
     # ------------------------------------------------------------------
     # Storage step (e.g. WH/SFP: Post-Production -> Stock)
