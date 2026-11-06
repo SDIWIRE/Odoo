@@ -98,7 +98,8 @@ class MrpProduction(models.Model):
             return False, 0.0
         if self.state in OPEN_MO_STATES:
             return 'open', pending
-        if self.state == 'done' and self.name not in reversed_names:
+        if self.state == 'done' and self.name not in reversed_names and self.product_id.is_storable:
+            # Consumables carry no stock, so a duplicate receipt changes nothing.
             posted = sum(
                 m.product_uom._compute_quantity(m.quantity, self.product_uom_id)
                 for m in self.move_finished_ids
@@ -201,8 +202,7 @@ class MrpProduction(models.Model):
         remaining = self.product_qty - self.qty_produced
         self.qty_producing = self.qty_produced + qty
         self._pt_set_components_for(qty)
-        finished.quantity = qty
-        finished.picked = True
+        # The finished quantity is filled in by Odoo (qty_producing - qty_produced).
         if float_compare(qty, remaining, precision_rounding=rounding) < 0:
             done_before = self.move_finished_ids.filtered(lambda m: m.state == 'done')
             self._post_inventory(cancel_backorder=False)
@@ -226,6 +226,15 @@ class MrpProduction(models.Model):
 
     def _pt_convert_duplicate(self, qty, index):
         self.ensure_one()
+        stock_root = self.picking_type_id.warehouse_id.lot_stock_id
+        on_hand = self.product_id.with_context(location=stock_root.id).qty_available
+        need = self.product_uom_id._compute_quantity(qty, self.product_id.uom_id)
+        if float_compare(on_hand, need, precision_rounding=self.product_id.uom_id.rounding) < 0:
+            raise UserError(_(
+                'only %(on_hand)s %(uom)s on hand, so the %(need)s received twice cannot be '
+                'returned without going negative. These units are already gone: correct '
+                'the product with a count instead.',
+                on_hand=on_hand, need=need, uom=self.product_id.uom_id.name))
         legacy = self._pt_legacy_moves(index)
         cancelled = self._pt_cancel_legacy_storage(legacy)
         returned = self._pt_return_legacy(legacy, qty)

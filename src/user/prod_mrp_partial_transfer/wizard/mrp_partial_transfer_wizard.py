@@ -59,13 +59,14 @@ class MrpPartialTransferWizard(models.TransientModel):
 
     # ------------------------------------------------------------------
     def _prepare(self, mo, qty, target_producing):
-        """Set what Odoo should post: components pro rata through Odoo's own
-        qty_producing logic, and exactly ``qty`` on the open finished move."""
+        """Set what Odoo should post: qty_producing, and components pro rata
+        through Odoo's own qty_producing logic. The finished quantity is left
+        to Odoo: in Odoo 19 a picked finished move already counts as produced,
+        so setting it here makes _post_inventory post nothing (verified on
+        staging, Nov 6 2026)."""
         mo.qty_producing = target_producing
         mo._set_qty_producing()
         finished = mo._pt_open_finished_move()
-        finished.quantity = qty
-        finished.picked = True
         if not self.allow_component_shortage:
             shortages = mo._pt_component_shortages()
             if shortages:

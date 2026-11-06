@@ -1,4 +1,4 @@
-# prod_mrp_partial_transfer 19.0.2.1.0
+# prod_mrp_partial_transfer 19.0.2.1.1
 
 Replaces 19.0.1.0.0 (the Sept 24, 2026 build installed in production). Implements
 option A of the Nov 5, 2026 fix brief: every partial transfer is posted on the MO
@@ -6,6 +6,17 @@ itself, the way Odoo's own production posting works.
 
 The folder name must stay `prod_mrp_partial_transfer` so Odoo upgrades the
 installed module instead of installing a second one.
+
+## Fixed in 19.0.2.1.1 (found on staging-41414302, Nov 6)
+
+* Partial posting posted 0 finished units: the code marked the finished move as picked
+  before posting, and in Odoo 19 a picked finished move already counts as produced, so
+  `_post_inventory` posted nothing. Odoo now fills in the finished quantity itself. Checked
+  on MO 02160 with a rolled-back test: 99 posted, components consumed, MO still open with 1
+  expected, customer Pick reserved.
+* Duplicate conversion now skips consumable products (no stock effect) and refuses when the
+  units received twice are no longer on hand (CR 16441, MOs 02244 and 02273): those need a
+  count, not a return that drives stock negative.
 
 ## New in 19.0.2.1.0: converting the old app's receipts
 
@@ -79,7 +90,7 @@ component moves (Nov 6). Remaining release steps:
 
 1. Staging (copy of production): replace the module folder in the staging branch with
    this one, deploy, then Apps > MRP Partial Transfer to Stock > Upgrade. Version must
-   read 19.0.2.1.0. If the view `mrp.production.form.partial.transfer` was archived to
+   read 19.0.2.1.1. If the view `mrp.production.form.partial.transfer` was archived to
    hide the old button, unarchive it.
 2. Run the conversion (MOs with Old Partial Transfers > select all > Convert). Then the
    list must be empty, Done MOs with Open Moves empty, no open SFP left from WH/QC receipts.
