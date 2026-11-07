@@ -1,10 +1,7 @@
 # -*- coding: utf-8 -*-
-from odoo import models, fields, api, _
+from odoo import _, api, fields, models
 from odoo.exceptions import UserError
-from odoo.tools import float_compare
-import logging
-
-_logger = logging.getLogger(__name__)
+from odoo.tools import float_compare, float_round
 
 
 class MrpPartialTransferWizard(models.TransientModel):
@@ -12,230 +9,124 @@ class MrpPartialTransferWizard(models.TransientModel):
     _description = 'Transfer Partial Finished Goods to Stock'
 
     production_id = fields.Many2one('mrp.production', string='Manufacturing Order',
-                                     required=True, readonly=True)
-    product_id = fields.Many2one('product.product', string='Finished Product', readonly=True)
-    product_uom_id = fields.Many2one('uom.uom', string='Unit of Measure', readonly=True)
-    qty_to_transfer = fields.Float(string='Quantity to Transfer', required=True,
-                                    digits='Product Unit of Measure')
-    qty_remaining = fields.Float(string='Remaining to Produce', readonly=True,
-                                  digits='Product Unit of Measure')
-    location_dest_id = fields.Many2one('stock.location', string='Destination Location',
-                                        required=True, domain=[('usage', '=', 'internal')])
-    lot_id = fields.Many2one('stock.lot', string='Lot/Serial Number',
-                              domain="[('product_id', '=', product_id)]")
+                                    required=True, readonly=True)
+    product_id = fields.Many2one(related='production_id.product_id')
+    product_uom_id = fields.Many2one(related='production_id.product_uom_id')
+    qty_ordered = fields.Float(related='production_id.product_qty', string='Ordered')
+    qty_done = fields.Float(related='production_id.qty_produced', string='Already Transferred')
+    qty_remaining = fields.Float(string='Remaining', compute='_compute_qty_remaining',
+                                 digits='Product Unit of Measure')
+    qty_to_transfer = fields.Float(string='Quantity to Transfer Now', required=True,
+                                   digits='Product Unit of Measure')
+    is_final = fields.Boolean(compute='_compute_qty_remaining')
+    allow_component_shortage = fields.Boolean(
+        string='Post even if components are short',
+        help='Components missing from their source location will go negative.')
+    accept_consumption_differences = fields.Boolean(
+        string='Accept consumption differences',
+        help='Close the MO even if component consumption differs from the BoM.')
 
-    @api.model
-    def default_get(self, fields_list):
-        res = super().default_get(fields_list)
-        production_id = self.env.context.get('default_production_id')
-        if production_id:
-            production = self.env['mrp.production'].browse(production_id)
-            finished_move = production.move_finished_ids.filtered(
-                lambda m: m.product_id == production.product_id
-                and m.state not in ('done', 'cancel')
-            )[:1]
-            if finished_move:
-                res['location_dest_id'] = finished_move.location_dest_id.id
-        return res
+    @api.depends('production_id.product_qty', 'production_id.qty_produced', 'qty_to_transfer')
+    def _compute_qty_remaining(self):
+        for wiz in self:
+            mo = wiz.production_id
+            rounding = mo.product_uom_id.rounding or 0.0001
+            wiz.qty_remaining = max(mo.product_qty - mo.qty_produced, 0.0)
+            wiz.is_final = bool(mo) and float_compare(
+                wiz.qty_to_transfer, wiz.qty_remaining, precision_rounding=rounding) >= 0
 
-    @api.constrains('qty_to_transfer', 'qty_remaining')
-    def _check_qty(self):
-        for wizard in self:
-            if wizard.qty_to_transfer <= 0:
-                raise UserError(_('Quantity to transfer must be greater than zero.'))
-            if wizard.qty_to_transfer > wizard.qty_remaining:
-                raise UserError(_(
-                    'You cannot transfer more than the remaining quantity '
-                    '(%(remaining)s %(uom)s).',
-                    remaining=wizard.qty_remaining,
-                    uom=wizard.product_uom_id.name,
-                ))
-
+    # ------------------------------------------------------------------
     def action_confirm_transfer(self):
         self.ensure_one()
-        production = self.production_id
-
-        if self.qty_to_transfer <= 0:
-            raise UserError(_('Quantity to transfer must be greater than zero.'))
-        if self.qty_to_transfer > self.qty_remaining:
+        mo = self.production_id
+        mo._pt_check_can_transfer()
+        mo._pt_require('_set_qty_producing')
+        mo._pt_require('_post_inventory')
+        rounding = mo.product_uom_id.rounding
+        qty = float_round(self.qty_to_transfer, precision_rounding=rounding)
+        remaining = mo.product_qty - mo.qty_produced
+        if float_compare(qty, 0.0, precision_rounding=rounding) <= 0:
+            raise UserError(_('Enter a quantity greater than zero.'))
+        if float_compare(qty, remaining, precision_rounding=rounding) > 0:
             raise UserError(_(
-                'Cannot transfer %(requested)s — only %(remaining)s %(uom)s remaining.',
-                requested=self.qty_to_transfer,
-                remaining=self.qty_remaining,
-                uom=self.product_uom_id.name,
-            ))
-
-        # ── Step 1: Find the production virtual location ─────────────────────
-        finished_move = production.move_finished_ids.filtered(
-            lambda m: m.product_id == production.product_id
-            and m.state not in ('done', 'cancel')
-        )[:1]
-        if not finished_move:
-            raise UserError(_('No open finished-goods move found on this Manufacturing Order.'))
-        production_location = finished_move.location_id
-
-        # ── Step 2: Find an internal picking type ────────────────────────────
-        picking_type = self.env['stock.picking.type'].search([
-            ('code', '=', 'internal'),
-            ('company_id', '=', production.company_id.id),
-            ('warehouse_id', '!=', False),
-        ], limit=1)
-        if not picking_type:
-            raise UserError(_(
-                'No internal transfer operation type found for company %s.',
-                production.company_id.name,
-            ))
-
-        # ── Step 3: Create internal picking ──────────────────────────────────
-        picking = self.env['stock.picking'].create({
-            'picking_type_id': picking_type.id,
-            'location_id': production_location.id,
-            'location_dest_id': self.location_dest_id.id,
-            'origin': production.name,
-            'company_id': production.company_id.id,
-            'move_ids': [(0, 0, {
-                'product_id': self.product_id.id,
-                'product_uom_qty': self.qty_to_transfer,
-                'product_uom': self.product_uom_id.id,
-                'location_id': production_location.id,
-                'location_dest_id': self.location_dest_id.id,
-            })],
-        })
-        picking.action_confirm()
-        picking.action_assign()
-
-        # ── Step 4: Set done quantity on move lines ───────────────────────────
-        for move in picking.move_ids:
-            if not move.move_line_ids:
-                self.env['stock.move.line'].create({
-                    'move_id': move.id,
-                    'picking_id': picking.id,
-                    'product_id': self.product_id.id,
-                    'product_uom_id': self.product_uom_id.id,
-                    'quantity': self.qty_to_transfer,
-                    'location_id': production_location.id,
-                    'location_dest_id': self.location_dest_id.id,
-                    'company_id': production.company_id.id,
-                })
-            else:
-                for ml in move.move_line_ids:
-                    ml.quantity = self.qty_to_transfer
-                    if self.lot_id:
-                        ml.lot_id = self.lot_id.id
-
-        # ── Step 5: Validate picking → goods in inventory immediately ─────────
-        picking.with_context(skip_backorder=True).button_validate()
-
-        # ── Step 6: Update qty_transferred_to_stock on the MO ────────────────
-        already_produced = production.qty_transferred_to_stock
-        new_total = already_produced + self.qty_to_transfer
-        production.write({'qty_transferred_to_stock': new_total})
-
-        # ── Step 7: Auto-close or keep open ──────────────────────────────────
-        rounding = production.product_uom_id.rounding
-        remaining_after = production.product_qty - new_total
-
-        if float_compare(remaining_after, 0, precision_rounding=rounding) <= 0:
-            # ── Fully transferred — close via button_mark_done ────────────────
-            # This is critical: using button_mark_done (not a direct state write)
-            # ensures Odoo's standard costing flow runs, which:
-            #   - Validates all remaining raw material moves (clears ASSIGNED status)
-            #   - Creates Stock Valuation Layer (SVL) entries
-            #   - Writes unit_cost onto stock.move records
-            #   - Sets MO state to done with date_finished properly
-            _logger.info(
-                'MO %s fully transferred (%s %s). Closing via button_mark_done.',
-                production.name, new_total, production.product_uom_id.name,
-            )
-
-            # Set qty_producing to full demand so Odoo knows all is accounted for
-            try:
-                production.write({'qty_producing': production.product_qty})
-            except Exception as e:
-                _logger.warning('Could not set qty_producing on MO %s: %s', production.name, e)
-
-            try:
-                result = production.button_mark_done()
-
-                # button_mark_done can return a wizard action in two cases:
-                # 1. mrp.immediate.production  — qty not set, needs confirmation
-                # 2. mrp.production.backorder  — partial qty, asks about backorder
-                # We handle both to ensure clean closure with no backorder.
-                if isinstance(result, dict) and result.get('res_model'):
-                    wizard_model = result['res_model']
-                    _logger.info('button_mark_done returned wizard: %s', wizard_model)
-
-                    if wizard_model == 'mrp.immediate.production':
-                        wizard = self.env[wizard_model].with_context(
-                            result.get('context', {})
-                        ).create({'production_ids': [(4, production.id)]})
-                        wizard.process()
-
-                    elif wizard_model == 'mrp.production.backorder':
-                        # Tell Odoo: do NOT create a backorder
-                        wizard = self.env[wizard_model].with_context(
-                            result.get('context', {})
-                        ).create({
-                            'mrp_production_backorder_line_ids': [(0, 0, {
-                                'mrp_production_id': production.id,
-                                'to_backorder': False,
-                            })]
-                        })
-                        wizard.action_close_production()
-
-            except Exception as e:
-                # Fallback: direct write if button_mark_done fails unexpectedly.
-                # Log clearly so the admin knows costing may need manual review.
-                _logger.error(
-                    'button_mark_done failed on MO %s: %s. '
-                    'Falling back to direct state write — unit costs may need '
-                    'manual review in stock.move.',
-                    production.name, e,
-                )
-                production.write({
-                    'state': 'done',
-                    'date_finished': fields.Datetime.now(),
-                })
-
-            production.message_post(body=_(
-                '<b>Partial Transfer to Stock — Order Complete</b><br/>'
-                'Final transfer: <b>%(qty)s %(uom)s</b> of <b>%(product)s</b> '
-                'to <b>%(location)s</b> via picking <b>%(picking)s</b>.<br/>'
-                'Total transferred: <b>%(total)s of %(demand)s %(uom)s</b>.<br/>'
-                'Manufacturing Order closed. Stock moves and unit costs '
-                'processed via standard Odoo costing flow.',
-                qty=self.qty_to_transfer,
-                uom=self.product_uom_id.name,
-                product=self.product_id.display_name,
-                location=self.location_dest_id.complete_name,
-                picking=picking.name,
-                total=new_total,
-                demand=production.product_qty,
-            ))
-
+                'You cannot transfer more than the remaining %(rem)s %(uom)s on %(mo)s.',
+                rem=remaining, uom=mo.product_uom_id.name, mo=mo.name))
+        if float_compare(qty, remaining, precision_rounding=rounding) == 0:
+            self._post_final(mo, qty)
         else:
-            # ── Still more to produce — keep MO open ──────────────────────────
-            if production.state == 'done':
-                production.write({'state': 'progress'})
-                _logger.info(
-                    'MO %s forced back to progress. Remaining: %s %s',
-                    production.name, remaining_after, production.product_uom_id.name,
-                )
-
-            production.message_post(body=_(
-                '<b>Partial Transfer to Stock</b><br/>'
-                'Transferred <b>%(qty)s %(uom)s</b> of <b>%(product)s</b> '
-                'to <b>%(location)s</b> via picking <b>%(picking)s</b>.<br/>'
-                'Total so far: <b>%(total)s</b> of <b>%(demand)s %(uom)s</b>. '
-                'Remaining: <b>%(remaining)s %(uom)s</b>.',
-                qty=self.qty_to_transfer,
-                uom=self.product_uom_id.name,
-                product=self.product_id.display_name,
-                location=self.location_dest_id.complete_name,
-                picking=picking.name,
-                total=new_total,
-                demand=production.product_qty,
-                remaining=remaining_after,
-            ))
-
+            self._post_partial(mo, qty)
         return {'type': 'ir.actions.act_window_close'}
+
+    # ------------------------------------------------------------------
+    def _prepare(self, mo, qty, target_producing):
+        """Set what Odoo should post: qty_producing, and components pro rata
+        through Odoo's own qty_producing logic. The finished quantity is left
+        to Odoo: in Odoo 19 a picked finished move already counts as produced,
+        so setting it here makes _post_inventory post nothing (verified on
+        staging, Nov 6 2026)."""
+        mo.qty_producing = target_producing
+        mo._set_qty_producing()
+        finished = mo._pt_open_finished_move()
+        if not self.allow_component_shortage:
+            shortages = mo._pt_component_shortages()
+            if shortages:
+                raise UserError(_(
+                    'Components are short for %(mo)s, so nothing has been posted:\n%(lines)s\n\n'
+                    'Pick the components to production first, or tick '
+                    '"Post even if components are short".',
+                    mo=mo.name, lines='\n'.join(shortages)))
+        return finished
+
+    def _post_partial(self, mo, qty):
+        rounding = mo.product_uom_id.rounding
+        done_before = mo.move_finished_ids.filtered(lambda m: m.state == 'done')
+        self._prepare(mo, qty, mo.qty_produced + qty)
+        mo.with_context(pt_posting=True)._post_inventory(cancel_backorder=False)
+        self.env.invalidate_all()
+        new_done = mo.move_finished_ids.filtered(
+            lambda m: m.state == 'done' and m.product_id == mo.product_id) - done_before
+        posted = sum(m.product_uom._compute_quantity(m.quantity, mo.product_uom_id) for m in new_done)
+        if float_compare(posted, qty, precision_rounding=rounding) != 0:
+            raise UserError(_(
+                'Odoo posted %(posted)s instead of %(qty)s %(uom)s on %(mo)s. '
+                'Nothing has been saved.',
+                posted=posted, qty=qty, uom=mo.product_uom_id.name, mo=mo.name))
+        if mo.state in ('done', 'cancel') or not mo._pt_open_finished_move():
+            raise UserError(_(
+                'Posting a partial quantity unexpectedly closed %s. Nothing has been saved.',
+                mo.name))
+        mo.pt_used = True
+        mo._pt_store_finished(new_done)
+        mo._pt_log(_('Partial transfer posted'), _(
+            '%(qty)s %(uom)s of %(product)s produced and put away. '
+            'Produced %(done)s of %(total)s.',
+            qty=qty, uom=mo.product_uom_id.name, product=mo.product_id.display_name,
+            done=mo.qty_produced, total=mo.product_qty))
+
+    def _post_final(self, mo, qty):
+        self._prepare(mo, qty, mo.product_qty)
+        mo.pt_used = True  # makes the button_mark_done hook put the goods away
+        ctx = {'pt_posting': True}
+        if self.accept_consumption_differences:
+            ctx['skip_consumption'] = True
+        res = mo.with_context(**ctx).button_mark_done()
+        if mo.state != 'done':
+            raise UserError(self._explain_blocked_close(mo, res))
+        mo._pt_log(_('Final transfer posted, MO closed'), _(
+            '%(qty)s %(uom)s of %(product)s produced and put away. '
+            'Manufacturing Order closed with the standard Mark as Done.',
+            qty=qty, uom=mo.product_uom_id.name, product=mo.product_id.display_name))
+
+    def _explain_blocked_close(self, mo, res):
+        model = isinstance(res, dict) and res.get('res_model') or ''
+        if model == 'mrp.consumption.warning':
+            return _(
+                'Component consumption on %s differs from the bill of materials, '
+                'so Odoo asked for a confirmation. Nothing has been posted. Check '
+                'the Components tab, then run the transfer again with '
+                '"Accept consumption differences" ticked.', mo.name)
+        reason = isinstance(res, dict) and (res.get('name') or model) or _('no reason given')
+        return _(
+            'Odoo could not close %(mo)s automatically (%(reason)s). Nothing has '
+            'been posted. Close it with the standard Mark as Done button to see '
+            'what Odoo needs.', mo=mo.name, reason=reason)

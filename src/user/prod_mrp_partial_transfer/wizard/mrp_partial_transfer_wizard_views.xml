@@ -9,28 +9,29 @@
                     <group>
                         <group string="Manufacturing Order">
                             <field name="production_id" readonly="1"/>
-                            <field name="product_id" readonly="1"/>
-                            <field name="product_uom_id" readonly="1" string="Unit of Measure"/>
+                            <field name="product_id"/>
+                            <field name="product_uom_id" string="Unit"/>
                         </group>
                         <group string="Quantities">
-                            <field name="qty_remaining" readonly="1" string="Remaining to Produce"/>
-                            <field name="qty_to_transfer" string="Quantity to Transfer Now" required="1"/>
+                            <field name="qty_ordered"/>
+                            <field name="qty_done"/>
+                            <field name="qty_remaining"/>
+                            <field name="qty_to_transfer"/>
+                            <field name="is_final" invisible="1"/>
                         </group>
                     </group>
-                    <group>
-                        <group string="Destination">
-                            <field name="location_dest_id" string="Transfer to Location"/>
-                            <field name="lot_id"
-                                   invisible="product_id.tracking == 'none'"
-                                   string="Lot / Serial Number"/>
-                        </group>
+                    <group string="Options">
+                        <field name="allow_component_shortage"/>
+                        <field name="accept_consumption_differences" invisible="not is_final"/>
                     </group>
-                    <div class="alert alert-info" role="alert">
-                        <p>This will move the specified quantity of finished goods into stock
-                        <strong>immediately</strong>, while keeping the Manufacturing Order open
-                        for the remaining quantity. When the final quantity is transferred the
-                        MO will be closed automatically via Odoo's standard process so that
-                        unit costs and valuation entries are recorded correctly.</p>
+                    <div class="alert alert-info" role="alert" invisible="is_final">
+                        This posts the quantity on the Manufacturing Order, consumes the
+                        components for it, and puts the finished goods away in stock.
+                        The MO stays open for the rest.
+                    </div>
+                    <div class="alert alert-warning" role="alert" invisible="not is_final">
+                        This is the remaining quantity: the Manufacturing Order will be
+                        closed with the standard Mark as Done.
                     </div>
                 </sheet>
                 <footer>

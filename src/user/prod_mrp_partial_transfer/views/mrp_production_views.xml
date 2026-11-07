@@ -6,36 +6,92 @@
         <field name="inherit_id" ref="mrp.mrp_production_form_view"/>
         <field name="arch" type="xml">
 
-            <!-- Button next to Validate -->
             <xpath expr="//button[@name='button_mark_done']" position="before">
                 <button name="action_partial_transfer_to_stock"
                         string="Transfer Partial to Stock"
                         type="object"
                         class="btn-primary"
-                        invisible="not show_partial_transfer_button"
-                        icon="fa-truck"/>
+                        icon="fa-truck"
+                        invisible="not show_partial_transfer_button"/>
+                <button name="action_pt_convert_legacy"
+                        string="Convert Old Partial Transfers"
+                        type="object"
+                        class="btn-warning"
+                        groups="mrp.group_mrp_manager"
+                        invisible="not pt_legacy_pending"
+                        confirm="This returns the receipts made by the old app and posts the same quantity on this Manufacturing Order (or, on a Done MO, returns the duplicate receipt). Continue?"/>
+                <button name="action_pt_close_at_produced"
+                        string="Close at Transferred Qty"
+                        type="object"
+                        invisible="not show_pt_close_button"/>
             </xpath>
 
-            <!-- Hidden control fields -->
             <xpath expr="//field[@name='product_qty']" position="after">
+                <field name="pt_used" invisible="1"/>
                 <field name="show_partial_transfer_button" invisible="1"/>
-                <field name="qty_progress_pct" invisible="1"/>
-                <field name="qty_transferred_to_stock" invisible="1"/>
-                <field name="qty_remaining_to_produce" invisible="1"/>
+                <field name="show_pt_close_button" invisible="1"/>
+                <field name="pt_legacy_pending" invisible="1"/>
             </xpath>
 
-            <!-- Running total panel — injected before the notebook tabs -->
             <xpath expr="//notebook" position="before">
-                <group string="Transfer Progress"
-                       invisible="qty_transferred_to_stock == 0"
-                       col="4">
-                    <field name="qty_transferred_to_stock" readonly="1" string="Transferred to Stock"/>
-                    <field name="qty_remaining_to_produce" readonly="1" string="Remaining to Produce"/>
-                    <field name="product_qty" readonly="1" string="Total Ordered"/>
-                    <field name="qty_progress_pct" readonly="1" string="% Complete" widget="percentage"/>
+                <div class="alert alert-warning" role="alert" invisible="not pt_legacy_pending">
+                    <field name="pt_legacy_mode" readonly="1" nolabel="1"/>:
+                    <field name="pt_legacy_qty" readonly="1" nolabel="1" class="oe_inline"/>
+                    received by the old partial transfer app still need converting.
+                </div>
+                <group string="Transfer Progress" invisible="not pt_used" col="4">
+                    <field name="qty_transferred_to_stock" readonly="1"/>
+                    <field name="qty_remaining_to_produce" readonly="1"/>
+                    <field name="qty_progress_pct" readonly="1" widget="percentage"/>
                 </group>
             </xpath>
 
         </field>
     </record>
+
+    <record id="action_pt_legacy_mos" model="ir.actions.act_window">
+        <field name="name">MOs with Old Partial Transfers</field>
+        <field name="res_model">mrp.production</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('pt_legacy_pending', '=', True)]</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No receipts from the old partial transfer app are left to convert.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_pt_legacy_mos"
+              name="MOs with Old Partial Transfers"
+              parent="mrp.menu_mrp_configuration"
+              action="action_pt_legacy_mos"
+              groups="mrp.group_mrp_manager"
+              sequence="99"/>
+
+    <record id="action_server_pt_convert_legacy" model="ir.actions.server">
+        <field name="name">Convert Old Partial Transfers</field>
+        <field name="model_id" ref="mrp.model_mrp_production"/>
+        <field name="binding_model_id" ref="mrp.model_mrp_production"/>
+        <field name="binding_view_types">list</field>
+        <field name="state">code</field>
+        <field name="code">action = records.action_pt_convert_legacy()</field>
+    </record>
+
+    <!-- Replaces the old "Fix Stuck Moves" sweep: with this version a Done MO
+         should never have open moves, so any listed here is a bug to look at. -->
+    <record id="action_pt_done_mo_open_moves" model="ir.actions.act_window">
+        <field name="name">Done MOs with Open Moves</field>
+        <field name="res_model">mrp.production</field>
+        <field name="view_mode">list,form</field>
+        <field name="domain">[('state', '=', 'done'), '|', ('move_raw_ids.state', 'in', ['draft', 'waiting', 'confirmed', 'partially_available', 'assigned']), ('move_finished_ids.state', 'in', ['draft', 'waiting', 'confirmed', 'partially_available', 'assigned'])]</field>
+        <field name="help" type="html">
+            <p class="o_view_nocontent_smiling_face">No Done Manufacturing Order has open stock moves.</p>
+            <p>Any MO listed here is a bug to investigate, not something to sweep.</p>
+        </field>
+    </record>
+
+    <menuitem id="menu_pt_done_mo_open_moves"
+              name="Done MOs with Open Moves"
+              parent="mrp.menu_mrp_configuration"
+              action="action_pt_done_mo_open_moves"
+              groups="mrp.group_mrp_manager"
+              sequence="100"/>
 </odoo>
